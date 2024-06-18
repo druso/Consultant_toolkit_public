@@ -1,0 +1,15 @@
+streamlit
+pandas
+openpyxl
+groq
+openai
+transformers
+requests
+tiktoken
+textract
+numpy
+scikit-learn
+beautifulsoup4
+# torch
+# torchvision
+# torchaudio
