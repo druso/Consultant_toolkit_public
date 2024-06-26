@@ -1,4 +1,5 @@
-from src.prompts import categorizer_default_sys_msg, summarizer_default_sys_msg
+from src.prompts import sysmsg_keyword_categorizer,sysmsg_review_analyst_template, sysmsg_summarizer_template
+
 from src.external_tools import LlmManager, StopProcessingError, RetryableError, SkippableError
 import streamlit as st
 import pandas as pd
@@ -17,6 +18,13 @@ class DfRequestConstructor():
         self.available_columns = self.df.columns.tolist() 
         self.app_logger = app_logger
 
+        self.bulk_sys_templates = {
+            "Custom Prompt": "",
+            "Keyword categorization": sysmsg_keyword_categorizer,
+            "Review Analysis": sysmsg_review_analyst_template,
+            "Text Summarizer": sysmsg_summarizer_template,
+        }
+            
     def _column_refresh(self):
         self.available_columns = self.df.columns.tolist() 
     
@@ -128,7 +136,7 @@ class DfRequestConstructor():
         return self.df
 
 
-    def _base_batch_streamlit(self,function, query_name="query_name", response_name="response_name", function_name="function_name", config_package=None,**kwargs):
+    def _base_batch_streamlit(self,function,function_ready=True, query_name="query_name", response_name="response_name", function_name="function_name", config_package=None,**kwargs):
         
         if config_package:
     
@@ -154,6 +162,9 @@ class DfRequestConstructor():
             elif query_column == default_value:
                 st.warning("*No column selected. Please choose a column.*")
                 waiting_input=True
+            elif not function_ready:
+                st.warning("*You still need to configure something above*")
+                waiting_input=True 
             else:
                 waiting_input=False
                 
@@ -173,18 +184,27 @@ class DfRequestConstructor():
             st.write("### Batch Requests to LLM")
             st.write("Here you can take a column and massively process it through an LLM. Provide instructions as System Message")
 
-            with st.expander("Customize System Message"):
-                sys_msg = st.text_area("System Message",
-                            value= categorizer_default_sys_msg,
-                            height=300,
-                            help="System message is where you provide instructions that will be used to process each content of the column you select"
-                            )
+            selected_sysmsg_template = st.selectbox("System Prompt Template",options=list(self.bulk_sys_templates.keys()),)
+            sysmsg_template = self.bulk_sys_templates.get(selected_sysmsg_template, "No option selected") 
+            sys_msg = st.text_area("System Message",
+                        value= sysmsg_template,
+                        height=300,
+                        placeholder="Write here your instructions or select and customize one of the templates above",
+                        help="System message is where you provide instructions that will be used to process each content of the column you select"
+                        )
+            if not sys_msg:
+                function_ready = False
+            else:
+                function_ready = True
+
+            self._base_batch_streamlit(
+                function=llm_manager.llm_request,
+                function_ready = function_ready,
+                query_name="Content to LLM", 
+                response_name="LLM Response",
+                function_name="LLM",
+                sys_msg=sys_msg)
             
-            self._base_batch_streamlit(function=llm_manager.llm_request, 
-                                    query_name="Content to LLM", 
-                                    response_name="LLM Response",
-                                    function_name="LLM",
-                                    sys_msg=sys_msg)
         return self.df 
 
 
