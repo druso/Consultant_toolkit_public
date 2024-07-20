@@ -61,9 +61,6 @@ class LlmManager:
             ValueError: If an invalid configuration key is provided.
         """
         self.save_request_log = app_logger.save_request_log
-        if config_key == "streamlit":
-            config_key = st.sidebar.selectbox("llm model",['gpt4o mini','gpt3','gpt4o','llama8','llama70','mixtral','gemma'])
-            self.llm_temp = st.sidebar.slider("Temperature", min_value=0.0,max_value=2.0, value=0.3 ,step=0.1)
         self.openai_client = openai.OpenAI(api_key = st.session_state.get('OPENAI_API_KEY'))
         self.groq_client = groq.Groq(api_key = st.session_state.get('GROQ_API_KEY'))
         defeult_max_token = 3000
@@ -113,8 +110,14 @@ class LlmManager:
                      },
         }
 
+            
+        if config_key == "streamlit":
+            config_key = st.sidebar.selectbox("llm model",list(self.configurations.keys()))
+            self.llm_temp = st.sidebar.slider("Temperature", min_value=0.0,max_value=2.0, value=0.3 ,step=0.1)
+        
         if config_key not in self.configurations:
             raise ValueError("Invalid configuration key.")
+
         self.model = self.configurations[config_key]['model']
         self.embedding_source = self.configurations[config_key]['embedding_source']
         self.embeddings_model = self.configurations[config_key]['embeddings_model']
