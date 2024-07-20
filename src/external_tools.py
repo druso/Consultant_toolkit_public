@@ -62,13 +62,19 @@ class LlmManager:
         """
         self.save_request_log = app_logger.save_request_log
         if config_key == "streamlit":
-            config_key = st.sidebar.selectbox("llm model",['gpt3','gpt4o','llama8','llama70','mixtral','gemma'])
+            config_key = st.sidebar.selectbox("llm model",['gpt4o mini','gpt3','gpt4o','llama8','llama70','mixtral','gemma'])
             self.llm_temp = st.sidebar.slider("Temperature", min_value=0.0,max_value=2.0, value=0.3 ,step=0.1)
         self.openai_client = openai.OpenAI(api_key = st.session_state.get('OPENAI_API_KEY'))
         self.groq_client = groq.Groq(api_key = st.session_state.get('GROQ_API_KEY'))
         defeult_max_token = 3000
         
         self.configurations = {
+            "gpt4o mini": {'model': "gpt-4o-mini", 
+                     'client': self.openai_client,
+                     'embedding_source': 'openai',
+                     'embeddings_model': 'text-embedding-3-small',
+                     'max_token':defeult_max_token,
+                     },
             "gpt3": {'model': "gpt-3.5-turbo", 
                      'client': self.openai_client,
                      'embedding_source': 'openai',
