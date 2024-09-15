@@ -1,0 +1,39 @@
+# If True will require login to use the toolkit, credentials are set in user_config.yaml
+require_login: True
+
+
+# Set to true to use the service.
+# for each service provide a key name that will be assigned to the credentials of the servcie (API Keys..)
+# this key will be searched as env variable, if not found will be required to the user
+
+#LLMs
+groq:
+  use: True
+  key: GROQ_API_KEY
+  available_models:
+    - llama-3.1-8b-instant
+    - llama-3.1-70b-versatile
+    - mixtral-8x7b-32768
+    - gemma2-9b-it
+  max_token: 3000
+
+openai:
+  use: True
+  key: OPENAI_API_KEY
+  available_models:
+    - gpt-4o-mini
+    - gpt-3.5-turbo
+    - gpt-4o
+  max_token: 3000
+
+
+#3rd Parties
+serp_api:
+  use: True
+  key: SERP_API_KEY
+
+oxylab:
+  use: True
+  key: 
+    - OXYLABS_USER
+    - OXYLABS_PSW

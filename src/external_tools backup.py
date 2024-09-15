@@ -4,7 +4,6 @@ import groq
 import streamlit as st
 import json
 import time
-import os
 import requests
 import re
 import tiktoken
@@ -62,20 +61,56 @@ class LlmManager:
             ValueError: If an invalid configuration key is provided.
         """
         self.save_request_log = app_logger.save_request_log
-        self.tool_configs = st.session_state['tool_config']
-        self.credential_manager = st.session_state['credential_manager']
-
-
-        # Initialize configurations for each provider
-        self.configurations = {}
-        self._init_openai_config()
-        self._init_groq_config()
-
-        if self.configurations == {}:
-            st.error("No LLM model available. Please make sure api_keys are set properly")
-            st.stop()
+        self.openai_client = openai.OpenAI(api_key = st.session_state.get('OPENAI_API_KEY'))
+        self.groq_client = groq.Groq(api_key = st.session_state.get('GROQ_API_KEY'))
+        defeult_max_token = 3000
         
+        self.configurations = {
+            "gpt4o mini": {'model': "gpt-4o-mini", 
+                     'client': self.openai_client,
+                     'embedding_source': 'openai',
+                     'embeddings_model': 'text-embedding-3-small',
+                     'max_token':defeult_max_token,
+                     },
+            "gpt3": {'model': "gpt-3.5-turbo", 
+                     'client': self.openai_client,
+                     'embedding_source': 'openai',
+                     'embeddings_model': 'text-embedding-3-small',
+                     'max_token':defeult_max_token,
+                     },
+            "gpt4o": {'model': "gpt-4o", 
+                     'client': self.openai_client,
+                     'embedding_source': 'openai',
+                     'embeddings_model': 'text-embedding-3-small',
+                     'max_token':defeult_max_token,
+                     },
+            "llama3.1 8b (preview)": {'model': "llama-3.1-8b-instant", 
+                     'client': self.groq_client,
+                     'embedding_source': 'huggingface',
+                     'embeddings_model': 'jinaai/jina-embeddings-v2-base-en',
+                     'max_token':defeult_max_token,
+                     },
+            "llama3.1 70b (preview)": {'model': "llama-3.1-70b-versatile", 
+                     'client': self.groq_client,
+                     'embedding_source': 'huggingface',
+                     'embeddings_model': 'jinaai/jina-embeddings-v2-base-en',
+                     'max_token':defeult_max_token,
+                     },
+            "mixtral": {'model': "mixtral-8x7b-32768", 
+                     'client': self.groq_client,
+                     'embedding_source': 'huggingface',
+                     'embeddings_model': 'jinaai/jina-embeddings-v2-base-en',
+                     'max_token':defeult_max_token,
+                     },
+            "gemma2 9b": {'model': "gemma2-9b-it", 
+                     'client': self.groq_client,
+                     'embedding_source': 'huggingface',
+                     'embeddings_model': 'jinaai/jina-embeddings-v2-base-en',
+                     'max_token':defeult_max_token,
+                     },
+        }
 
+            
         if config_key == "streamlit":
             config_key = st.sidebar.selectbox("llm model",list(self.configurations.keys()))
             self.llm_temp = st.sidebar.slider("Temperature", min_value=0.0,max_value=2.0, value=0.3 ,step=0.1)
@@ -88,39 +123,6 @@ class LlmManager:
         self.embeddings_model = self.configurations[config_key]['embeddings_model']
         self.client = self.configurations[config_key]['client']
         self.max_token = self.configurations[config_key]['max_token']
-
-
-    def _init_openai_config(self):
-        if self.tool_configs['openai']['use']:
-            api_key = self.credential_manager.get_api_key('openai')
-            if api_key:
-                openai_client = openai.OpenAI(api_key=api_key)
-                for model in self.tool_configs['openai']['available_models']:
-                    self.configurations[model] = {
-                        'model': model,
-                        'client': openai_client,
-                        'embedding_source': 'openai',
-                        'embeddings_model': 'text-embedding-3-small',
-                        'max_token': self.tool_configs['openai'].get('max_token', 3000),
-                    }
-            else:
-                print("OpenAI API key not found")
-
-    def _init_groq_config(self):
-        if self.tool_configs['groq']['use']:
-            api_key = self.credential_manager.get_api_key('groq')
-            if api_key:
-                groq_client = groq.Groq(api_key=api_key)
-                for model in self.tool_configs['groq']['available_models']:
-                    self.configurations[model] = {
-                        'model': model,
-                        'client': groq_client,
-                        'embedding_source': 'huggingface',
-                        'embeddings_model': 'jinaai/jina-embeddings-v2-base-en',
-                        'max_token': self.tool_configs['groq'].get('max_token', 3000),
-                    }
-            else:
-                print("Groq API key not found")
 
     def _token_ceiling(self, text: str, llm_model: str = 'gpt-3.5-turbo') -> str:
         """
@@ -261,9 +263,8 @@ class AudioTranscribe:
 
 class SerpApiManager:
     def __init__(self,app_logger):
-        """Initialize the SerpAPIManager and set the url endpoints. API Key needs to be an env variable"""
         self.save_request_log = app_logger.save_request_log
-        self.credential_manager = st.session_state['credential_manager']
+        """Initialize the SerpAPIManager and set the url endpoints. API Key needs to be an env variable"""
         self.base_url = "https://serpapi.com/search"
         pass
     
@@ -271,15 +272,10 @@ class SerpApiManager:
         """Given a search_query and a num_result to provide it will return the organic first positions of the organic search
         The response will be a json with Position, Title, Link and Source for each result scraped.
         """
-        api_key = self.credential_manager.get_api_key('serp_api')
-        print (api_key)
-        if not api_key:
-            raise StopProcessingError("SerpAPI key not found. Please set it in the **🔧 Settings & Recovery** page.")
-
         params = {
             'engine': 'google',  # Specifies which search engine to use, e.g., google
             'q': search_query,  # Query parameter, what you are searching for
-            'api_key': api_key,  # SerpApi API key
+            'api_key': st.session_state.get('SERP_API_KEY'),  # Your SerpApi API key
             'gl': country,
         }
         try:
@@ -347,29 +343,9 @@ class WebScraper:
 class OxyLabsManager():
     def __init__(self,app_logger):
         self.save_request_log = app_logger.save_request_log
-        """Initialize the Oxylab Manager and set the url endpoints. API Key needs to be an env variable"""
-        self.credential_manager = st.session_state['credential_manager']
+        """Initialize the SerpAPIManager and set the url endpoints. API Key needs to be an env variable"""
         self.base_url = "https://realtime.oxylabs.io/v1/queries"
         pass
-
-    def _get_credentials(self):
-
-        oxylab_keys = self.credential_manager.get_api_key('oxylab')
-        if not isinstance(oxylab_keys, dict):
-            raise StopProcessingError("OxyLabs credentials are not in the expected format.")
-        
-        username = oxylab_keys.get('OXYLABS_USER')
-        password = oxylab_keys.get('OXYLABS_PSW')
-
-        print(username)
-        print(password)
-
-        if not username or not password:
-            raise StopProcessingError("OxyLabs username or password is missing. Please set it in the **🔧 Settings & Recovery** page.")
-        
-        return username, password
-    
-    
 
     def _is_valid_asin(self, asin_str):
         """
@@ -393,7 +369,8 @@ class OxyLabsManager():
         if not self._is_valid_asin(asin):
             raise RetryableError(f"Invalid ASIN, it should contain 10 characters either int or letters: {asin[:20]}") 
 
-        username, password= self._get_credentials()
+        username = st.session_state.get('OXYLABS_USER')
+        password = st.session_state.get('OXYLABS_PSW')
 
         payload = {
             "source": "amazon_product",  
@@ -442,9 +419,10 @@ class OxyLabsManager():
 
     def extract_amazon_reviews(self,asin,amazon_domain, review_pages):
         if not self._is_valid_asin(asin):
-            raise SkippableError(f"Invalid ASIN, it should contain 10 characters either int or letters: {asin[:20]}") 
+            raise RetryableError(f"Invalid ASIN, it should contain 10 characters either int or letters: {asin[:20]}") 
 
-        username, password= self._get_credentials()
+        username = st.session_state.get('OXYLABS_USER')
+        password = st.session_state.get('OXYLABS_PSW')
 
         payload = {
             "source": "amazon_reviews",  
@@ -492,3 +470,4 @@ class OxyLabsManager():
 
 
     ### Should extend oxylab and serpapi interfaces
+    ### Should create a proper logger

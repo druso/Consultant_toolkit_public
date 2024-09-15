@@ -10,6 +10,7 @@ textract
 numpy
 scikit-learn
 beautifulsoup4
+streamlit_authenticator==0.3.2
 # torch
 # torchvision
 # torchaudio

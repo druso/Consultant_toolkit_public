@@ -8,9 +8,17 @@ page_config = {'page_title':"Consulting toolkit",
 
 page_setup(page_config)
 
-with open("readme.md", "r", encoding="utf-8") as f:
-    readme_content = f.read()
+if st.session_state["authentication_status"]:
+    with open("readme.md", "r", encoding="utf-8") as f:
+        readme_content = f.read()
 
-st.write(readme_content)
+    st.write(readme_content)
+    
+
+elif st.session_state["authentication_status"] is False:
+    st.error('Username/password is incorrect')
+    st.sidebar.error('Username/password is incorrect')
+elif st.session_state["authentication_status"] is None:
+    st.sidebar.warning('Please enter your username and password')
 
 page_footer()
