@@ -1,4 +1,5 @@
 #add users to the login of the tool by configuring this file and saving it as users.yaml
+#any value that starts with $ will be replaced with the value of the environment variable of the same name
 credentials:
   usernames:
     user_1:

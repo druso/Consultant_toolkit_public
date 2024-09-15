@@ -5,21 +5,41 @@ import streamlit_authenticator as stauth
 from src.file_manager import AppLogger
 from yaml.loader import SafeLoader
 from functools import lru_cache
+import re
+
+
+def substitute_env_vars(yaml_content):
+    pattern = re.compile(r'\$([A-Za-z0-9_]+)')
+    
+    def replace(match):
+        env_var = match.group(1)
+        return os.environ.get(env_var, f'${env_var}')
+    
+    return pattern.sub(replace, yaml_content)
 
 
 @lru_cache(maxsize=1)
-def load_config(file_name):
+def load_config(file_name, handle_env_vars=True):
     try:
         with open(file_name, 'r') as file:
-            return yaml.load(file, Loader=SafeLoader)
+            yaml_content = file.read()
+ 
+        if handle_env_vars:
+            yaml_content = substitute_env_vars(yaml_content)
+
+        return yaml.safe_load(yaml_content)
     except FileNotFoundError:
         print(f"Configuration file {file_name} not found.")
         return {}
+    
 
 
 def user_login():
     if st.session_state['tool_config'].get('require_login', False):
         user_config = load_config('users.yaml')
+        if not user_config:
+            st.error("Users configuration file not found. Please check users.yaml file")
+            st.stop()
         authenticator = stauth.Authenticate(
             user_config.get ('credentials', {}),
             user_config.get('cookie', {}).get('name', 'consulting_toolkit_cookie'),

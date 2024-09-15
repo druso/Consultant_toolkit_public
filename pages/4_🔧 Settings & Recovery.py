@@ -8,12 +8,6 @@ page_config = {'page_title':"Settings & Recovery",
 
 page_setup(page_config)
 
-
-
-#DOES NOT SAVE THE CREDENTIALS IF INPUTTED A SECOND TIME (Look oxylabs)
-
-
-
 def handle_service_credentials(service, credential_manager):
     if service['initialized'] != "os":
         value = st.text_input(service['key'], type='password', value= service.get("user_provided_key"))
