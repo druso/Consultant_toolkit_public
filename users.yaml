@@ -1,0 +1,12 @@
+credentials:
+  usernames:
+    $APP_USERNAME:
+      failed_login_attempts: 0
+      name: $APP_USERNAME
+      logged_in: False
+      password: $APP_PASSWORD  # Will be replaced with env variable
+
+cookie:
+  expiry_days: 30
+  key: $COOKIE_KEY  # Will be replaced with env variable
+  name: consulting_toolkit_cookie
