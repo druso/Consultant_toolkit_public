@@ -13,40 +13,46 @@ page_config = {'page_title':"Audio Transcriber",
 
 page_setup(page_config)
 
-uploaded_file, file_name = DataLoader("audio").load_user_file()
-llm_manager = LlmManager("streamlit",st.session_state["app_logger"])
-audio_transcriber = AudioTranscribe(st.session_state["app_logger"])
-transcript = ""
+if st.session_state["authentication_status"]:
 
-tabs= st.tabs(["Transcribe","Summarize"])
-with tabs[0]:
-    if not uploaded_file:
-        st.write("## Load an audio file to start")
+    uploaded_file, file_name = DataLoader("audio").load_user_file()
+    llm_manager = LlmManager("streamlit",st.session_state["app_logger"])
+    audio_transcriber = AudioTranscribe(st.session_state["app_logger"])
+    transcript = ""
 
-    else: 
-        if st.button("Transcribe!", use_container_width=True, type="primary"):
-            transcript = audio_transcriber.whisper_openai_transcribe(uploaded_file)
-        st.text_area("Your Transcription",transcript,placeholder="The transcription will apper here")
+    tabs= st.tabs(["Transcribe","Summarize"])
+    with tabs[0]:
+        if not uploaded_file:
+            st.write("## Load an audio file to start")
 
-        st.download_button(
-                label="Download Text File",
-                data=transcript.encode('utf-8'),  # Convert the string to bytes
-                file_name="sample_text.txt",
-                mime="text/plain"
-            )
-    
-with tabs[1]:
-    if not transcript:
-        st.write("Transcribe something first")
+        else: 
+            if st.button("Transcribe!", use_container_width=True, type="primary"):
+                transcript = audio_transcriber.whisper_openai_transcribe(uploaded_file)
+            st.text_area("Your Transcription",transcript,placeholder="The transcription will apper here")
 
-    else:
-        SingleRequestConstructor().llm_summarize(transcript, llm_manager)
-        st.download_button(
-                label="Download Text File",
-                data=transcript.encode('utf-8'),  # Convert the string to bytes
-                file_name="sample_text.txt",
-                mime="text/plain"
-            )
+            st.download_button(
+                    label="Download Text File",
+                    data=transcript.encode('utf-8'),  # Convert the string to bytes
+                    file_name="sample_text.txt",
+                    mime="text/plain"
+                )
+        
+    with tabs[1]:
+        if not transcript:
+            st.write("Transcribe something first")
 
+        else:
+            SingleRequestConstructor().llm_summarize(transcript, llm_manager)
+            st.download_button(
+                    label="Download Text File",
+                    data=transcript.encode('utf-8'),  # Convert the string to bytes
+                    file_name="sample_text.txt",
+                    mime="text/plain"
+                )
 
+elif st.session_state["authentication_status"] is False:
+    st.error('Username/password is incorrect')
+    st.sidebar.error('Username/password is incorrect')
+elif st.session_state["authentication_status"] is None:
+    st.sidebar.warning('Please enter your username and password')
 page_footer()

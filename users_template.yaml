@@ -1,0 +1,13 @@
+#add users to the login of the tool by configuring this file and saving it as users.yaml
+credentials:
+  usernames:
+    user_1:
+      failed_login_attempts: 0 # Will be managed automatically
+      logged_in: False # Will be managed automatically
+      name: user
+      password: user # Will be hashed automatically
+
+cookie:
+  expiry_days: 30
+  key: some_signature_key # Must be string
+  name: some_cookie_name
