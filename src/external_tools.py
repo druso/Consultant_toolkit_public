@@ -353,7 +353,6 @@ class SerpApiManager:
         The response will be a json with Position, Title, Link and Source for each result scraped.
         """
         api_key = self.credential_manager.get_api_key('serp_api')
-        print (api_key)
         if not api_key:
             raise StopProcessingError("SerpAPI key not found. Please set it in the **🔧 Settings & Recovery** page.")
 
@@ -417,7 +416,8 @@ class WebScraper:
             content = "\n\n".join(text_elements)
 
             # Save to your log
-            self.save_request_log({"content": text_elements}, "Crawler", f"base_crawl_{url}")
+            clean_url = re.sub(r'[^\w\-_]', '_', url)[:20]
+            self.save_request_log({"content": text_elements}, "Crawler", f"base_crawl_{clean_url}")
 
             return content
 
@@ -441,9 +441,6 @@ class OxyLabsManager():
         
         username = oxylab_keys.get('OXYLABS_USER')
         password = oxylab_keys.get('OXYLABS_PSW')
-
-        print(username)
-        print(password)
 
         if not username or not password:
             raise StopProcessingError("OxyLabs username or password is missing. Please set it in the **🔧 Settings & Recovery** page.")
