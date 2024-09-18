@@ -51,7 +51,7 @@ if st.session_state["authentication_status"]:
 
         
 
-        tabs = st.tabs(["LLM", "SerpAPI", "Crawler", "Amazon", "Table Handler"])
+        tabs = st.tabs(["LLM", "SerpAPI", "Crawler", "Amazon", "Assistant Setup", "Table Handler"])
         with tabs[0]:        
             st.session_state['processed_df'] = request_constructor.llm_request_single_column(llm_manager)
         with tabs[1]:
@@ -61,6 +61,8 @@ if st.session_state["authentication_status"]:
         with tabs[3]:
             st.session_state['processed_df'] = request_constructor.oxylabs_request_single_column(oxylabs_manager)
         with tabs[4]:
+            st.write("## Assistant Setup Work in Progress")
+        with tabs[5]:
             st.session_state['processed_df'] = request_constructor.df_handler()
 
 

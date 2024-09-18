@@ -1,12 +1,21 @@
 from src.prompts import sysmsg_keyword_categorizer,sysmsg_review_analyst_template, sysmsg_summarizer_template
 
-from src.external_tools import LlmManager, StopProcessingError, RetryableError, SkippableError
+from src.external_tools import LlmManager, StopProcessingError, RetryableError, SkippableError, openai_advanced_uses
 import streamlit as st
 import pandas as pd
 import tiktoken
 import math
 import time
 from sklearn.metrics.pairwise import cosine_similarity
+
+
+from openai.types.beta.assistant_stream_event import (
+    ThreadRunStepCreated,
+    ThreadRunStepDelta,
+    ThreadRunStepCompleted,
+    ThreadMessageCreated,
+    ThreadMessageDelta
+    )
 
     
 class DfRequestConstructor():
@@ -321,9 +330,6 @@ class DfRequestConstructor():
 
         return self.df
 
-
-
-
     
 class SingleRequestConstructor():
     def __init__(self):
@@ -453,3 +459,142 @@ class TextEmbeddingsProcessors():
             combined_chunk += st.session_state['chunks_df'].loc[i, 'chunk']
 
         return combined_chunk, df
+
+
+class chat_interface():
+    def __init__(self, openai_advanced_uses:openai_advanced_uses):
+        self.openai_advanced_uses = openai_advanced_uses
+        pass
+
+    def assistant_create_thread(self):
+        if "thread_id" not in st.session_state:
+            thread = self.openai_advanced_uses.create_thread()
+            st.session_state['thread_id'] = thread.id
+        st.sidebar.write(f"Thread id:{st.session_state['thread_id']}")
+        if st.sidebar.button("reset thread", use_container_width=True):
+            thread = self.openai_advanced_uses.create_thread()
+            st.session_state['thread_id'] = thread.id
+            st.session_state['messages'] = []
+
+
+    def assistant_chat_interface(self):   
+        starting_message = "ask away"
+
+        if "messages" not in st.session_state:
+            st.session_state['messages'] = []
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                for item in message["items"]:
+                    item_type = item["type"]
+                    if item_type == "text":
+                        st.markdown(item["content"])
+                    elif item_type == "image":
+                        for image in item["content"]:
+                            st.html(image)
+                    elif item_type == "code_input":
+                        with st.status("Code", state="complete"):
+                            st.code(item["content"])
+                    elif item_type == "code_output":
+                        with st.status("Results", state="complete"):
+                            st.code(item["content"])
+
+        if message_content := st.chat_input(starting_message):
+
+            st.session_state.messages.append({"role": "user",
+                                            "items": [
+                                                {"type": "text", 
+                                                "content": message_content
+                                                }]})
+            
+            self.openai_advanced_uses.create_message(st.session_state['thread_id'], message_content)
+
+
+            with st.chat_message("user"):
+                st.markdown(message_content)
+
+            with st.chat_message("assistant"):
+                stream = client.beta.threads.runs.create(
+                    thread_id=st.session_state.thread_id,
+                    assistant_id=ASSISTANT_ID,
+                    tool_choice={"type": "code_interpreter"},
+                    stream=True
+                )
+
+                assistant_output = []
+
+                for event in stream:
+
+                    if isinstance(event, ThreadRunStepCreated):
+                        if event.data.step_details.type == "tool_calls":
+                            assistant_output.append({"type": "code_input", "content": ""})
+                            code_input_expander = st.status("Writing code ⏳ ...", expanded=True)
+                            code_input_block = code_input_expander.empty()
+
+                    elif isinstance(event, ThreadRunStepDelta):
+                        if hasattr(event.data.delta.step_details, 'tool_calls'):
+                            tool_calls = event.data.delta.step_details.tool_calls
+                            if tool_calls and tool_calls[0].code_interpreter:
+                                code_interpreter = tool_calls[0].code_interpreter
+                                code_input_delta = code_interpreter.input
+                                if code_input_delta:
+                                    assistant_output[-1]["content"] += code_input_delta
+                                    code_input_block.empty()
+                                    code_input_block.code(assistant_output[-1]["content"])
+
+                    elif isinstance(event, ThreadRunStepCompleted):
+                        if hasattr(event.data.step_details, 'tool_calls'):
+                            tool_calls = event.data.step_details.tool_calls
+                            if tool_calls:
+                                code_interpreter = tool_calls[0].code_interpreter
+                                if code_interpreter.outputs:
+                                    code_input_expander.update(label="Code", state="complete", expanded=False)
+                                    try:
+                                        output = code_interpreter.outputs[0]
+
+                                        if isinstance(output, CodeInterpreterOutputImage):
+                                            image_html_list = []
+                                            for output in code_interpreter.outputs:
+                                                image_file_id = output.image.file_id
+                                                image_data = client.files.content(image_file_id)
+                                                image_path = f"{images_folder_path}/{image_file_id}.png"
+
+                                                with open(image_path, "wb") as file:
+                                                    file.write(image_data.read())
+
+                                                with open(image_path, "rb") as file_:
+                                                    data_url = base64.b64encode(file_.read()).decode("utf-8")
+
+                                                image_html = f'<p align="center"><img src="data:image/png;base64,{data_url}" width=600></p>'
+                                                st.html(image_html)
+                                                image_html_list.append(image_html)
+
+                                            assistant_output.append({"type": "image", "content": image_html_list})
+
+                                        elif isinstance(output, CodeInterpreterOutputLogs):
+                                            code_output = output.logs
+                                            assistant_output.append({"type": "code_output", "content": code_output})
+                                            with st.status("Results", state="complete"):
+                                                st.code(code_output)
+                                    except Exception as e:
+                                        print(f"No outputs from code interpreter: {e}")
+                                    finally:
+                                        code_input_expander.update(label="Code", state="complete", expanded=False)
+                                else:
+                                    code_input_expander.update(label="Code", state="complete", expanded=False)
+
+                    elif isinstance(event, ThreadMessageCreated):
+                        assistant_output.append({"type": "text", "content": ""})
+                        assistant_text_box = st.empty()
+
+                    elif isinstance(event, ThreadMessageDelta):
+                        if isinstance(event.data.delta.content[0], TextDeltaBlock):
+                            new_text = event.data.delta.content[0].text.value or ""
+                            last_output = assistant_output[-1] if assistant_output else {"type": "text", "content": ""}
+                            last_output["content"] += new_text
+                            if not assistant_output:
+                                assistant_output.append(last_output)
+                            assistant_text_box.markdown(last_output["content"])
+
+
+                
+                st.session_state.messages.append({"role": "assistant", "items": assistant_output})

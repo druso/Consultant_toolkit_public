@@ -24,6 +24,85 @@ class SkippableError(Exception):
     pass
 
 
+# assistant setup: 1- create assistant and get id, 2- upoload file and get file id 3- assign files to assistant
+#assistant run 1- create thread, 2- create message, 3- run assistant
+class openai_advanced_uses:
+
+    def __init__(self, app_logger: AppLogger):
+        self.save_request_log = app_logger.save_request_log
+        self.tool_configs = st.session_state['tool_config']
+        self.credential_manager = st.session_state['credential_manager']
+        api_key = self.credential_manager.get_api_key('openai')
+        if not api_key:
+            raise StopProcessingError("Requires OpenAI api_key to work")
+        
+        self.openai_client = openai.OpenAI(api_key=api_key)
+        pass
+
+    def openai_upload_file(self, file_path, purpose):
+        return self.openai_client.files.create(
+            file=open(file_path, "rb"),
+            purpose= purpose
+            )
+    
+    def openai_download_file(self, file_id):
+        return self.openai_client.files.content(file_id).read()
+            
+    
+    def create_batch_job(self, file_id,description):
+
+        self.openai_client.batches.create(
+        input_file_id=file_id,
+        endpoint="/v1/chat/completions",
+        completion_window="24h",
+        metadata={
+          "description": description
+        }
+      )
+        
+    def check_batch_job(self, batch_job):
+        return self.openai_client.batches.retrieve(batch_job)
+
+    def create_assistant(self, assistant_configs):
+        return self.openai_client.beta.assistants.create( # Should I get it or create it in the same function?
+                                    instructions=assistant_configs['assistant_sys_prompt'],
+                                    name=assistant_configs['assistant_name'],
+                                    tools=assistant_configs['tools'],
+                                    model=assistant_configs['model'],
+                                    )
+
+    def update_assistant_files(self, thread_id, file_ids):
+        self.openai_client.beta.threads.update(
+                thread_id=thread_id,
+                tool_resources={"code_interpreter": {"file_ids": file_ids}}
+                )
+
+    def list_assistants(self, order="desc", limit="20"):
+        return self.openai_client.beta.assistants.list(
+        order=order,
+        limit=limit,
+    )
+
+    def get_assistant(self, assistant_id):
+        return self.openai_client.beta.assistants.retrieve(assistant_id)
+
+    def create_thread(self):
+        return self.openai_client.beta.threads.create()
+    
+    def create_message(self, thread_id, assistant_id, message_content, tool_choice={"type": "code_interpreter"}):
+        return self.openai_client.beta.threads.runs.create(
+                    thread_id=thread_id,
+                    assistant_id=assistant_id,
+                    tool_choice=tool_choice,
+                    stream=True
+                ) #
+    
+    def run_assistant(self, assistant_id, thread_id, instructions):
+        return self.openai_client.beta.assistants.run(assistant_id, thread_id, instructions)
+
+
+
+
 class LlmManager:
     """
     Manages interactions with Large Language Models (LLMs) using the OpenAI or Groq API.
@@ -238,6 +317,8 @@ class LlmManager:
             raise StopProcessingError(f"Encountered an error: {e}")
         except Exception as e:
             raise RetryableError(f"Encountered an error: {e}")
+
+
 
 class AudioTranscribe:
     def __init__(self, app_logger):
