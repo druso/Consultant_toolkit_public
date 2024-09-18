@@ -128,7 +128,6 @@ def page_setup(page_config):
             st.session_state['credential_manager'] = CredentialManager(st.session_state['tool_config'])
  
         services_list = st.session_state['credential_manager'].get_services_list()
-        print (services_list)
         
         if [service for service in services_list if service['initialized'] == False]:
             st.warning("Some API keys are not set. Please go to **🔧 Settings & Recovery** from menu and provide them to use the full potential of the toolkit")
