@@ -209,9 +209,7 @@ class DataUtilities:
     def unroll_json_in_dataframe(self, df: pd.DataFrame, column_name: str) -> pd.DataFrame:
         """
         Unrolls (flattens) JSON data within a specified column of a DataFrame.
-
-        Handles both list-like and dictionary-like JSON structures. Preserves other
-        columns in the DataFrame during the unrolling process.
+        Skips rows that are not valid JSON.
 
         Args:
             df (pd.DataFrame): The DataFrame containing the JSON data.
@@ -219,53 +217,36 @@ class DataUtilities:
 
         Returns:
             pd.DataFrame: The unrolled DataFrame or the original DataFrame if an error occurs.
-
-        Raises:
-            JSONDecodeError: If there's an issue parsing invalid JSON strings.
-            KeyError: If the specified `column_name` doesn't exist in the DataFrame.
-            TypeError: If the data in the specified column isn't of a valid JSON type (list, dict). 
         """
-        try:
-            # Create a new column to store expanded JSON data
-            expanded_column_name = f"expanded_{column_name}"
-            df[expanded_column_name] = df[column_name].apply(
-                lambda x: json.loads(x) if isinstance(x, str) else x
-            )
-
-            def explode_and_normalize(row):
-                data = row[expanded_column_name]
-                if isinstance(data, list):
-                    return pd.DataFrame(data).assign(
-                        **{col: row[col] for col in df.columns if col != expanded_column_name}
-                    )
-                elif isinstance(data, dict):
-                    normalized = json_normalize(data)
-                    for col in df.columns:
-                        if col != expanded_column_name:
-                            normalized[col] = row[col]
-                    return normalized
-                else:
-                    return pd.DataFrame([row], columns=df.columns)
-
-            expanded_df = pd.concat(df.apply(explode_and_normalize, axis=1).tolist(), ignore_index=True)
-
-            # Handle the case where the input DataFrame has only one column
-            if len(df.columns) == 1:
-                result_df = expanded_df.copy()
+        def explode_and_normalize(data):
+            if isinstance(data, list):
+                return pd.DataFrame(data)
+            elif isinstance(data, dict):
+                return pd.json_normalize(data)
             else:
-                existing_columns = list(df.columns)
-                new_columns = [col for col in expanded_df.columns if col not in existing_columns]
-                reordered_columns = existing_columns + new_columns
-                result_df = expanded_df[reordered_columns]
+                return None
 
-            # Drop the temporary expanded column
-            result_df = result_df.drop(columns=[expanded_column_name])
+        result_rows = []
+        for index, row in df.iterrows():
+            try:
+                json_data = row[column_name]
+                if isinstance(json_data, str):
+                    json_data = json.loads(json_data)
+                
+                expanded_data = explode_and_normalize(json_data)
+                if expanded_data is not None:
+                    for _, expanded_row in expanded_data.iterrows():
+                        new_row = row.drop(column_name).to_dict()
+                        new_row.update(expanded_row)
+                        result_rows.append(new_row)
+                else:
+                    result_rows.append(row.to_dict())
+            except Exception as e:
+                print(f"Error processing row {index}: {e}")
+                result_rows.append(row.to_dict())
 
-            return result_df
-
-        except Exception as e:
-            print(f"An error occurred: {e}")
-            return df
+        result_df = pd.DataFrame(result_rows)
+        return result_df
 
 
 
