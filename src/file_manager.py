@@ -374,32 +374,3 @@ class AppLogger() :
         folder = f"{self.logs_folder}/{selected_session_id}/{selected_logs_type}"
         zipped_logs = self.zip_directory(folder)
         return zipped_logs
-
-
-
-
-    """def expand_json_in_dataframe(self, df, column_name):
-        # Check if the column contains stringified JSON or dictionaries
-        try:
-            # Attempt to load the JSON content; it assumes either valid JSON strings or Python dicts
-            df[column_name] = df[column_name].apply(lambda x: json.loads(x) if isinstance(x, str) else x)
-        except json.JSONDecodeError:
-            print("Error decoding JSON. Ensure the column contains valid JSON or dictionaries.")
-
-        # Prepare to collect rows that do not need expansion
-        other_rows = df[df[column_name].apply(lambda x: not isinstance(x, dict))]
-        
-        # Prepare to expand rows with JSON-like structures
-        json_rows = df[df[column_name].apply(lambda x: isinstance(x, dict))]
-        
-        # Normalize and expand the JSON-like data into a DataFrame
-        expanded_data = json_rows.explode(column_name).reset_index(drop=True)
-        expanded_df = json_normalize(expanded_data[column_name])
-        
-        # Merge the expanded data with the original DataFrame index and other columns
-        expanded_df = pd.concat([expanded_data.drop(columns=[column_name]), expanded_df], axis=1)
-        
-        # Concatenate the rows with no JSON with the expanded DataFrame
-        result_df = pd.concat([other_rows, expanded_df], ignore_index=True)
-        
-        return result_df"""
