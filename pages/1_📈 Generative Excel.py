@@ -57,7 +57,7 @@ if st.session_state["authentication_status"]:
         with tabs[1]:
             st.session_state['processed_df'] = request_constructor.serpapi_request_single_column(serpapi_manager)    
         with tabs[2]:
-            st.session_state['processed_df'] = request_constructor.crawler_request_single_column(web_scraper)    
+            st.session_state['processed_df'] = request_constructor.crawler_request_single_column(web_scraper, oxylabs_manager)   
         with tabs[3]:
             st.session_state['processed_df'] = request_constructor.oxylabs_request_single_column(oxylabs_manager)
         with tabs[4]:
