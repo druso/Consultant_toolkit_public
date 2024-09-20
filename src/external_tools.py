@@ -267,7 +267,7 @@ class SerpApiManager:
         self.base_url = "https://serpapi.com/search"
         pass
     
-    def extract_organic_results(self, search_query, num_results, country):
+    def extract_organic_results(self, search_query, num_results, country, lastyears=None):
         """Given a search_query and a num_result to provide it will return the organic first positions of the organic search
         The response will be a json with Position, Title, Link and Source for each result scraped.
         """
@@ -281,6 +281,9 @@ class SerpApiManager:
             'api_key': api_key,  # SerpApi API key
             'gl': country,
         }
+        if lastyears > 0:
+            params['tbs'] = f"qdr:y{lastyears}"
+
         try:
             response = requests.get(self.base_url, params=params)
             if response.status_code == 401:
