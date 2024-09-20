@@ -238,7 +238,6 @@ class DfRequestConstructor():
         else:
             st.write("### Batch Requests to SerpAPI")
             st.write("Here you can take a column and search each item on SerpAPI")
-            st.write('what?')
 
             country=st.selectbox("country",['it','us','uk','fr','de','es'])
             num_results = st.number_input("Number of results per query",min_value=1,max_value=10,step=1,value=3, help="The number of search results to save in the response")
@@ -252,17 +251,25 @@ class DfRequestConstructor():
         return self.df
 
 
-    def crawler_request_single_column(self, web_scraper, config_package=None):
+    def crawler_request_single_column(self, web_scraper,oxylabs_manager, config_package=None):
         if config_package:
             self._base_batch_streamlit(function=web_scraper.url_simple_extract, config_package=config_package, force_string=False)
         else:
             st.write("### Batch Crawling Requests")
             st.write("Here you can take links stored in a column and crawl them massively")
+            crawler_type = st.selectbox("Select the crawler", options=["Oxylabs", "Generic"], help="Select the crawler you want to use")
 
-            self._base_batch_streamlit(function=web_scraper.url_simple_extract, 
-                                    query_name="Link to crawl", 
-                                    response_name="Crawled content",
-                                    function_name="Crawl",)
+            if crawler_type == "Oxylabs":
+                self._base_batch_streamlit(function=oxylabs_manager.generic_crawler, 
+                                        query_name="Link to crawl", 
+                                        response_name="Crawled content",
+                                        function_name="Crawl",)
+            
+            else:
+                self._base_batch_streamlit(function=web_scraper.url_simple_extract, 
+                                        query_name="Link to crawl", 
+                                        response_name="Crawled content",
+                                        function_name="Crawl",)
         return self.df
 
 

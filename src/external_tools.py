@@ -387,10 +387,12 @@ class SerpApiManager:
             result = response_json['organic_results'][i]
             # Extract the desired information
             extracted_data = {
-                'position': result.get('position'),
-                'link': result.get('link'),
-                'source': result.get('source', 'No source provided'),  # Provide default if source is missing
-                'title': result.get('title')
+                'position': result.get('position', 'No position provided'),
+                'link': result.get('link', 'No link provided'),
+                'source': result.get('source', 'No source provided'),
+                'title': result.get('title', 'No title provided'),
+                'snippet': result.get('snippet', 'No snippet provided'),
+                'date': result.get('date', 'No date provided')
             }
             results.append(extracted_data)
         
@@ -398,8 +400,7 @@ class SerpApiManager:
 
 
 class WebScraper:
-    #need to add
-    #Generic - using oxylab for improved rendering
+
     def __init__(self,app_logger):
         self.save_request_log = app_logger.save_request_log
     def url_simple_extract(self, url):
@@ -568,5 +569,47 @@ class OxyLabsManager():
         print( json.dumps(results, indent=4))
         return json.dumps(results, indent=4)
 
+    def generic_crawler(self, url):
+        
+        username, password= self._get_credentials()
+
+        payload = {
+          'source': 'universal',
+          'render': 'html',
+          'user_agent_type': 'desktop_chrome',
+          'locale': 'it-it',
+          'url': url
+        }
+
+        try:
+            response = requests.post(
+                'https://realtime.oxylabs.io/v1/queries',
+                auth=(username, password),
+                json=payload,
+                timeout=30  
+            )
+            response.raise_for_status()  
+            content = response.json()
+
+            if 'results' not in content or not content['results']:
+                raise ValueError("No results found in the API response")
+
+            soup = BeautifulSoup(content["results"][0]["content"], 'html.parser')
+
+            # Rest of the code remains the same
+            text_elements = [tag.get_text(strip=True) for tag in soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'])]
+            clean_content = "\n".join(text_elements)
+
+            return clean_content
+
+        except requests.RequestException as e:
+            print(f"Request failed: {e}")
+            return f"Error: Failed to fetch content - {str(e)}"
+        except (KeyError, IndexError, ValueError) as e:
+            print(f"Parsing error: {e}")
+            return f"Error: Failed to parse content - {str(e)}"
+        except Exception as e:
+            print(f"Unexpected error: {e}")
+            return f"Error: An unexpected error occurred - {str(e)}"
 
     ### Should extend oxylab and serpapi interfaces
