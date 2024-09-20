@@ -47,6 +47,9 @@ class openai_advanced_uses:
     
     def openai_download_file(self, file_id):
         return self.openai_client.files.content(file_id).read()
+    
+    def openai_download_image(self, image_file_id):
+        return self.openai_client.files.content(image_file_id).read()
             
     
     def create_batch_job(self, file_id,description):

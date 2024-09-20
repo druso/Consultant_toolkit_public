@@ -6,6 +6,7 @@ import pandas as pd
 import tiktoken
 import math
 import time
+import base64
 from sklearn.metrics.pairwise import cosine_similarity
 
 
@@ -15,6 +16,13 @@ from openai.types.beta.assistant_stream_event import (
     ThreadRunStepCompleted,
     ThreadMessageCreated,
     ThreadMessageDelta
+    )
+
+from openai.types.beta.threads.text_delta_block import TextDeltaBlock 
+from openai.types.beta.threads.runs.tool_calls_step_details import ToolCallsStepDetails
+from openai.types.beta.threads.runs.code_interpreter_tool_call import (
+    CodeInterpreterOutputImage,
+    CodeInterpreterOutputLogs
     )
 
     
@@ -468,20 +476,24 @@ class TextEmbeddingsProcessors():
         return combined_chunk, df
 
 
-class chat_interface():
+class assistant_interface():
     def __init__(self, openai_advanced_uses:openai_advanced_uses):
-        self.openai_advanced_uses = openai_advanced_uses
-        pass
 
-    def assistant_create_thread(self):
-        if "thread_id" not in st.session_state:
-            thread = self.openai_advanced_uses.create_thread()
-            st.session_state['thread_id'] = thread.id
-        st.sidebar.write(f"Thread id:{st.session_state['thread_id']}")
+        self.messages = []
+
+        self.openai_advanced_uses = openai_advanced_uses
+        self.thread = self.openai_advanced_uses.create_thread()
+        st.sidebar.write(f"Thread id:{thread.id}")
+
         if st.sidebar.button("reset thread", use_container_width=True):
             thread = self.openai_advanced_uses.create_thread()
-            st.session_state['thread_id'] = thread.id
-            st.session_state['messages'] = []
+            self.messages = []
+
+        assistant_ids = self.openai_advanced_uses.list_assistants
+        self.assistant_id = st.sidebar.selectbox("select assistant", assistant_ids, use_container_width=True)
+
+        self.assistant_chat_interface(self)
+        
 
 
     def assistant_chat_interface(self):   
@@ -513,19 +525,14 @@ class chat_interface():
                                                 "content": message_content
                                                 }]})
             
-            self.openai_advanced_uses.create_message(st.session_state['thread_id'], message_content)
+            self.openai_advanced_uses.create_message(self.thread.id, message_content)
 
 
             with st.chat_message("user"):
                 st.markdown(message_content)
 
             with st.chat_message("assistant"):
-                stream = client.beta.threads.runs.create(
-                    thread_id=st.session_state.thread_id,
-                    assistant_id=ASSISTANT_ID,
-                    tool_choice={"type": "code_interpreter"},
-                    stream=True
-                )
+                stream = self.openai_advanced_uses.create_message(self.thread.id, self.assistant_id, message_content)
 
                 assistant_output = []
 
@@ -562,11 +569,11 @@ class chat_interface():
                                             image_html_list = []
                                             for output in code_interpreter.outputs:
                                                 image_file_id = output.image.file_id
-                                                image_data = client.files.content(image_file_id)
-                                                image_path = f"{images_folder_path}/{image_file_id}.png"
+                                                image_data = self.openai_advanced_uses.openai_download_file(image_file_id)
+                                                image_path = f"{images_folder_path}/{image_file_id}.png" #deve gestirlo applogger####################################
 
                                                 with open(image_path, "wb") as file:
-                                                    file.write(image_data.read())
+                                                    file.write(image_data)
 
                                                 with open(image_path, "rb") as file_:
                                                     data_url = base64.b64encode(file_.read()).decode("utf-8")

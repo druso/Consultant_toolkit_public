@@ -10,7 +10,7 @@ page_setup(page_config)
 
 
 if st.session_state["authentication_status"]:
-    credential_manager = st.session_state['credential_manager']
+    pass
 
 
 
