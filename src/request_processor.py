@@ -247,15 +247,18 @@ class DfRequestConstructor():
             st.write("### Batch Requests to SerpAPI")
             st.write("Here you can take a column and search each item on SerpAPI")
 
-            country=st.selectbox("country",['it','us','uk','fr','de','es'])
+            country=st.selectbox("country",['it','us','uk','fr','de','es']) 
             num_results = st.number_input("Number of results per query",min_value=1,max_value=10,step=1,value=3, help="The number of search results to save in the response")
+
+            lastyears = st.number_input("N of Past Years",min_value=0,max_value=10,step=1,value=0, help="Limit results to certain past years. Set to 0 for no limit")
 
             self._base_batch_streamlit(function=serpapi_manager.extract_organic_results, 
                                     query_name="Content to search", 
                                     response_name="SerpAPI Response",
                                     function_name="SerpAPI",
                                     num_results=num_results,
-                                    country=country)
+                                    country=country,
+                                    lastyears=lastyears)
         return self.df
 
 
