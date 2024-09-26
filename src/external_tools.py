@@ -24,11 +24,10 @@ class SkippableError(Exception):
     pass
 
 
-# assistant setup: 1- create assistant and get id, 2- upoload file and get file id 3- assign files to assistant
-#assistant run 1- create thread, 2- create message, 3- run assistant
 class openai_advanced_uses:
 
     def __init__(self, app_logger: AppLogger):
+        self.app_logger = app_logger
         self.save_request_log = app_logger.save_request_log
         self.tool_configs = st.session_state['tool_config']
         self.credential_manager = st.session_state['credential_manager']
@@ -38,7 +37,9 @@ class openai_advanced_uses:
         
         self.openai_client = openai.OpenAI(api_key=api_key)
         pass
-
+    
+    #HANDLE FILES
+    #USED
     def openai_upload_file(self, file_path, purpose):
         return self.openai_client.files.create(
             file=open(file_path, "rb"),
@@ -48,11 +49,9 @@ class openai_advanced_uses:
     def openai_download_file(self, file_id):
         return self.openai_client.files.content(file_id).read()
     
-    def openai_download_image(self, image_file_id):
-        return self.openai_client.files.content(image_file_id).read()
             
-    
-    def create_batch_job(self, file_id,description):
+    # HANDLE BATCHES
+    """def create_batch_job(self, file_id,description):
 
         self.openai_client.batches.create(
         input_file_id=file_id,
@@ -64,45 +63,108 @@ class openai_advanced_uses:
       )
         
     def check_batch_job(self, batch_job):
-        return self.openai_client.batches.retrieve(batch_job)
-
+        return self.openai_client.batches.retrieve(batch_job)"""
+    
+    #HANDLE ASSISTANTS
+    #USED
     def create_assistant(self, assistant_configs):
-        return self.openai_client.beta.assistants.create( # Should I get it or create it in the same function?
+
+        return self.openai_client.beta.assistants.create( 
                                     instructions=assistant_configs['assistant_sys_prompt'],
                                     name=assistant_configs['assistant_name'],
                                     tools=assistant_configs['tools'],
                                     model=assistant_configs['model'],
                                     )
+    
+    def list_assistants(self, order="desc", limit="20"):
+        response = self.openai_client.beta.assistants.list(order=order,limit=limit,)
+        
+    
+        listed_assistants = [
+            (assistant.id, assistant.name)
+            for assistant in response.data
+        ]
+    
+        return listed_assistants
 
-    def update_assistant_files(self, thread_id, file_ids):
+    def setup_thread(self,thread_name, file_id, user_setup_msg, assistant_setup_msg):
+        thread = self.openai_client.beta.threads.create()
+        if isinstance(file_id, list):
+            attachments = file_id
+        else:
+            attachments = [{"file_id": file_id, "tools": [{"type": "code_interpreter"}]}]
+
+        self.openai_client.beta.threads.messages.create(
+            thread.id,
+            role="user",
+            content=user_setup_msg,
+            attachments=attachments)
+
+        self.openai_client.beta.threads.messages.create(
+            thread.id,
+            role="assistant",
+            content=assistant_setup_msg,
+                )
+        
+        self.app_logger.log_openai_thread( 
+                    thread_id=thread.id, 
+                    thread_name=thread_name, 
+                    thread_file_ids= attachments, 
+                    thread_history=[], 
+                    user_setup_msg=user_setup_msg, 
+                    assistant_setup_msg=assistant_setup_msg
+                    )
+        
+        return thread
+    
+    def erase_thread(self,thread_id):
+        self.openai_client.beta.threads.delete(thread_id)
+        self.app_logger.erase_thread_data(thread_id)
+
+
+    def reset_thread(self, thread_id):
+        thread_data = self.app_logger.get_thread_info(thread_id)
+        new_thread = self.setup_thread(thread_data['thread_name'], thread_data['file_ids'],thread_data['user_setup_msg'],thread_data['assistant_setup_msg'])
+        self.openai_client.beta.threads.delete(thread_id)
+        self.app_logger.erase_thread_data(thread_id)
+        st.success(f"New Thread id generated: {new_thread.id}")
+        return new_thread.id
+
+    #TEMPORARY USED
+    def create_thread(self,thread_config=None):
+
+        #this if not needs to be removed after testing
+        if not thread_config:
+            return self.openai_client.beta.threads.create()
+        return self.openai_client.beta.threads.create( 
+                                    instructions=thread_config['assistant_sys_prompt'],
+                                    name=thread_config['assistant_name'],
+                                    tools=thread_config['tools'],
+                                    model=thread_config['model'],
+                                    )
+    #TEMPORARY USED
+    def update_thread_files(self, thread_id, file_ids):
         self.openai_client.beta.threads.update(
                 thread_id=thread_id,
                 tool_resources={"code_interpreter": {"file_ids": file_ids}}
                 )
-
-    def list_assistants(self, order="desc", limit="20"):
-        return self.openai_client.beta.assistants.list(
-        order=order,
-        limit=limit,
-    )
-
-    def get_assistant(self, assistant_id):
-        return self.openai_client.beta.assistants.retrieve(assistant_id)
-
-    def create_thread(self):
-        return self.openai_client.beta.threads.create()
     
-    def create_message(self, thread_id, assistant_id, message_content, tool_choice={"type": "code_interpreter"}):
+    #USED
+    def post_message(self, thread_id, message_content):
+        return self.openai_client.beta.threads.messages.create(
+                    thread_id=thread_id,
+                    role="user",
+                    content=message_content
+                )
+    #USED
+    def stream_response(self, thread_id, assistant_id, tool_choice={"type": "code_interpreter"}):
         return self.openai_client.beta.threads.runs.create(
                     thread_id=thread_id,
                     assistant_id=assistant_id,
                     tool_choice=tool_choice,
                     stream=True
-                ) #
+                ) 
     
-    def run_assistant(self, assistant_id, thread_id, instructions):
-        return self.openai_client.beta.assistants.run(assistant_id, thread_id, instructions)
-
 
 
 
@@ -520,7 +582,6 @@ class OxyLabsManager():
             "answered_questions_count": data['results'][0]['content'].get('answered_questions_count'),
             "reviews_count": data['results'][0]['content'].get('reviews_count'),
             }
-        print(extracted_data)
         
         return json.dumps(extracted_data, indent=4)
     
@@ -572,7 +633,7 @@ class OxyLabsManager():
                 results.append(review)
         except:
             pass
-        print( json.dumps(results, indent=4))
+
         return json.dumps(results, indent=4)
 
     def generic_crawler(self, url):
@@ -600,6 +661,7 @@ class OxyLabsManager():
             if 'results' not in content or not content['results']:
                 raise ValueError("No results found in the API response")
 
+            self.save_request_log(content, "OxyLabs", f"crawler")
             soup = BeautifulSoup(content["results"][0]["content"], 'html.parser')
 
             # Rest of the code remains the same

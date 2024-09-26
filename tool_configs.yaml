@@ -37,3 +37,12 @@ oxylab:
   key: 
     - OXYLABS_USER
     - OXYLABS_PSW
+
+
+#Assistants setup
+assistant_configs:
+  assistant_name: 'Generic Data Analyst'
+  tools:
+    - type: "code_interpreter"
+  model: "gpt-4o"
+  temperature: 0.1

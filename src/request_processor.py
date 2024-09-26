@@ -7,6 +7,7 @@ import tiktoken
 import math
 import time
 import base64
+import os
 from sklearn.metrics.pairwise import cosine_similarity
 
 
@@ -478,33 +479,107 @@ class TextEmbeddingsProcessors():
 
         return combined_chunk, df
 
+class openai_thread_setup():
+    def __init__(self, openai_advanced_uses:openai_advanced_uses):
+        self.app_logger = st.session_state["app_logger"]
+        self.openai_advanced_uses = openai_advanced_uses
+
+    def __assistant_setup_msg_generator(self, df: pd.DataFrame) -> str:
+        shape = f"{df.shape[0]} rows, {df.shape[1]} cols"
+        
+        # Column information with unique values for object columns
+        col_info = ",".join([f"{col}({df[col].dtype},unique={df[col].nunique()})" if df[col].dtype == 'object' 
+                            else f"{col}({df[col].dtype})" for col in df.columns])
+        
+        return f"understood\nAnalysis of attached xlsx file:\nShape:{shape}\nColumns:{col_info}."
+
+
+    def streamlit_interface(self, df):
+        
+        thread_name = st.text_input("Thread name",self.app_logger.file_name,max_chars=30,help="This is how you can later select the thread in **🤖My Assistants**" )
+        
+        goals_example="The objective is to uncover how your target audience talks about competing products and brands, revealing their pain points, desires, and preferences. This insight will highlight opportunities for enhancing our product development and refining your communication strategy to better resonate with potential customers."
+        goals=st.text_area("Goal of the analysis", goals_example, help="This will help the assistant understanding the broad scope of the analysis", height=200)
+
+        file_description_example="""Each row of the file is a review available for key products from Augustings Bader, La Mer and Bluelagoon Skincare, from a selection of websites. It contains the rating, the source of the review, timestamp as well as keywords, emotions expressed and an evaluation of the experience expressed in the review along few categories."""
+        file_description=st.text_area("Description of the file", file_description_example,help="This will help the assistant understand the content of the file you're providing", height=200)
+        
+        user_setup_msg = f"#GOALS\n{goals}\n#FILE DESCRIPTION\n{file_description}"
+
+        if st.button("Create Thread"):
+            #Save and upload the file
+            with st.spinner("Uploading the file..."):
+                file_path = self.app_logger.log_excel(df,"assistant", True)
+                uploaded_file = self.openai_advanced_uses.openai_upload_file(file_path, "assistants")
+                file_id = uploaded_file.id
+                assistant_setup_msg = self.__assistant_setup_msg_generator(df)
+
+            #Generate the thread
+            with st.spinner("Requesting the setup of the thread..."):
+                thread = self.openai_advanced_uses.setup_thread(thread_name, file_id, user_setup_msg, assistant_setup_msg)
+                
+            st.write(f"Thread {thread_name} was set up correctly, you can now use it in the **🤖My Assistants** tab")
+
+
+
 
 class assistant_interface():
     def __init__(self, openai_advanced_uses:openai_advanced_uses):
-
-        self.messages = []
-
+        self.app_logger = st.session_state["app_logger"]
         self.openai_advanced_uses = openai_advanced_uses
-        self.thread = self.openai_advanced_uses.create_thread()
-        st.sidebar.write(f"Thread id:{thread.id}")
+        self.unavailable = False
 
-        if st.sidebar.button("reset thread", use_container_width=True):
-            thread = self.openai_advanced_uses.create_thread()
-            self.messages = []
+        self.setup_assistant()
+        self.setup_thread()
+        self.thread_buttons()
 
-        assistant_ids = self.openai_advanced_uses.list_assistants
-        self.assistant_id = st.sidebar.selectbox("select assistant", assistant_ids, use_container_width=True)
+        self.assistant_chat_interface()
 
-        self.assistant_chat_interface(self)
-        
+    def setup_assistant(self):
+            assistant_name_filter = st.session_state['tool_config']['assistant_configs']['assistant_name']
+            assistant_ids = [aid for aid in self.openai_advanced_uses.list_assistants() if aid[1] == assistant_name_filter]
+            
+            if assistant_ids:
+                selected_assistant = st.sidebar.selectbox("Select assistant", [name for _, name in assistant_ids])
+                self.assistant_id = next(id for id, name in assistant_ids if name == selected_assistant)
+                self.unavailable = False
+            else:
+                st.sidebar.write("No assistants available")
+                self.unavailable = True
+                self.starting_message = "You need to create an assistant in **🔧 Settings & Recovery** before you can use this tool"
 
 
-    def assistant_chat_interface(self):   
-        starting_message = "ask away"
-
-        if "messages" not in st.session_state:
+    def setup_thread(self):
+        thread_ids = self.app_logger.list_openai_threads()
+        if thread_ids:
+            selected_thread = st.sidebar.selectbox("Select thread", [name for _, name in thread_ids])
+            self.thread_id = next(id for id, name in thread_ids if name == selected_thread)
+            st.session_state['messages'] = self.app_logger.get_thread_history(self.thread_id)
+            self.starting_message = f"Ask anything to the thread {selected_thread}"
+            self.unavailable = False
+        else:
+            st.sidebar.write("No threads available")
             st.session_state['messages'] = []
-        for message in st.session_state.messages:
+            message = "You need to create a thread using **📈 Generative Excel** before you can use this tool"
+            st.sidebar.warning(message)
+            self.starting_message = message
+            self.unavailable = True
+
+
+    def thread_buttons(self):
+        if not self.unavailable and st.sidebar.button("reset thread", use_container_width=True):
+            self.thread_id = self.openai_advanced_uses.reset_thread(self.thread_id)
+            st.session_state['messages'] = []
+
+        if not self.unavailable and st.sidebar.button("erase thread", use_container_width=True):
+            self.thread_id = self.openai_advanced_uses.erase_thread(self.thread_id)
+            st.session_state['messages'] = []
+
+        
+        
+    def assistant_chat_interface(self):  
+
+        for message in st.session_state['messages']:
             with st.chat_message(message["role"]):
                 for item in message["items"]:
                     item_type = item["type"]
@@ -520,22 +595,22 @@ class assistant_interface():
                         with st.status("Results", state="complete"):
                             st.code(item["content"])
 
-        if message_content := st.chat_input(starting_message):
+        if message_content := st.chat_input(self.starting_message, disabled=self.unavailable):
 
-            st.session_state.messages.append({"role": "user",
+            st.session_state['messages'].append({"role": "user",
                                             "items": [
                                                 {"type": "text", 
                                                 "content": message_content
                                                 }]})
             
-            self.openai_advanced_uses.create_message(self.thread.id, message_content)
+            self.openai_advanced_uses.post_message(self.thread_id, message_content)
 
 
             with st.chat_message("user"):
                 st.markdown(message_content)
 
             with st.chat_message("assistant"):
-                stream = self.openai_advanced_uses.create_message(self.thread.id, self.assistant_id, message_content)
+                stream = self.openai_advanced_uses.stream_response(self.thread_id, self.assistant_id)
 
                 assistant_output = []
 
@@ -573,8 +648,9 @@ class assistant_interface():
                                             for output in code_interpreter.outputs:
                                                 image_file_id = output.image.file_id
                                                 image_data = self.openai_advanced_uses.openai_download_file(image_file_id)
-                                                image_path = f"{images_folder_path}/{image_file_id}.png" #deve gestirlo applogger####################################
-
+                                                image_folder = f"{self.app_logger.openai_threads_folder}/{self.thread_id}"
+                                                os.makedirs(image_folder, exist_ok=True)
+                                                image_path = f"{self.app_logger.openai_threads_folder}/{self.thread_id}/{image_file_id}.png"
                                                 with open(image_path, "wb") as file:
                                                     file.write(image_data)
 
@@ -611,7 +687,6 @@ class assistant_interface():
                             if not assistant_output:
                                 assistant_output.append(last_output)
                             assistant_text_box.markdown(last_output["content"])
-
-
                 
-                st.session_state.messages.append({"role": "assistant", "items": assistant_output})
+            st.session_state['messages'].append({"role": "assistant", "items": assistant_output})
+            self.app_logger.update_thread_history(st.session_state['messages'],self.thread_id)
