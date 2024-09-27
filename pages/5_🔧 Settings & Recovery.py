@@ -21,7 +21,7 @@ def handle_service_credentials(service, credential_manager):
 
 if st.session_state["authentication_status"]:
     credential_manager = st.session_state['credential_manager']
-    app_logger = AppLogger(st.session_state['name'])
+    app_logger = AppLogger(st.session_state['username'])
 
 
     st.title("API Keys Settings")#########################################################################################
