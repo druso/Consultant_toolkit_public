@@ -1,12 +1,30 @@
 from src.prompts import sysmsg_keyword_categorizer,sysmsg_review_analyst_template, sysmsg_summarizer_template
 
-from src.external_tools import LlmManager, StopProcessingError, RetryableError, SkippableError
+from src.external_tools import LlmManager, StopProcessingError, RetryableError, SkippableError, openai_advanced_uses
 import streamlit as st
 import pandas as pd
 import tiktoken
 import math
 import time
+import base64
+import os
 from sklearn.metrics.pairwise import cosine_similarity
+
+
+from openai.types.beta.assistant_stream_event import (
+    ThreadRunStepCreated,
+    ThreadRunStepDelta,
+    ThreadRunStepCompleted,
+    ThreadMessageCreated,
+    ThreadMessageDelta
+    )
+
+from openai.types.beta.threads.text_delta_block import TextDeltaBlock 
+from openai.types.beta.threads.runs.tool_calls_step_details import ToolCallsStepDetails
+from openai.types.beta.threads.runs.code_interpreter_tool_call import (
+    CodeInterpreterOutputImage,
+    CodeInterpreterOutputLogs
+    )
 
     
 class DfRequestConstructor():
@@ -331,9 +349,6 @@ class DfRequestConstructor():
 
         return self.df
 
-
-
-
     
 class SingleRequestConstructor():
     def __init__(self):
@@ -463,3 +478,215 @@ class TextEmbeddingsProcessors():
             combined_chunk += st.session_state['chunks_df'].loc[i, 'chunk']
 
         return combined_chunk, df
+
+class openai_thread_setup():
+    def __init__(self, openai_advanced_uses:openai_advanced_uses):
+        self.app_logger = st.session_state["app_logger"]
+        self.openai_advanced_uses = openai_advanced_uses
+
+    def __assistant_setup_msg_generator(self, df: pd.DataFrame) -> str:
+        shape = f"{df.shape[0]} rows, {df.shape[1]} cols"
+        
+        # Column information with unique values for object columns
+        col_info = ",".join([f"{col}({df[col].dtype},unique={df[col].nunique()})" if df[col].dtype == 'object' 
+                            else f"{col}({df[col].dtype})" for col in df.columns])
+        
+        return f"understood\nAnalysis of attached xlsx file:\nShape:{shape}\nColumns:{col_info}."
+
+
+    def streamlit_interface(self, df):
+        
+        thread_name = st.text_input("Thread name",self.app_logger.file_name,max_chars=30,help="This is how you can later select the thread in **🤖My Assistants**" )
+        
+        goals_example="The objective is to uncover how your target audience talks about competing products and brands, revealing their pain points, desires, and preferences. This insight will highlight opportunities for enhancing our product development and refining your communication strategy to better resonate with potential customers."
+        goals=st.text_area("Goal of the analysis", goals_example, help="This will help the assistant understanding the broad scope of the analysis", height=200)
+
+        file_description_example="""Each row of the file is a review available for key products from Augustings Bader, La Mer and Bluelagoon Skincare, from a selection of websites. It contains the rating, the source of the review, timestamp as well as keywords, emotions expressed and an evaluation of the experience expressed in the review along few categories."""
+        file_description=st.text_area("Description of the file", file_description_example,help="This will help the assistant understand the content of the file you're providing", height=200)
+        
+        user_setup_msg = f"#GOALS\n{goals}\n#FILE DESCRIPTION\n{file_description}"
+
+        if st.button("Create Thread"):
+            #Save and upload the file
+            with st.spinner("Uploading the file..."):
+                file_path = self.app_logger.log_excel(df,"assistant", True)
+                uploaded_file = self.openai_advanced_uses.openai_upload_file(file_path, "assistants")
+                file_id = uploaded_file.id
+                assistant_setup_msg = self.__assistant_setup_msg_generator(df)
+
+            #Generate the thread
+            with st.spinner("Requesting the setup of the thread..."):
+                thread = self.openai_advanced_uses.setup_thread(thread_name, file_id, user_setup_msg, assistant_setup_msg)
+                
+            st.write(f"Thread {thread_name} was set up correctly, you can now use it in the **🤖My Assistants** tab")
+
+
+
+
+class assistant_interface():
+    def __init__(self, openai_advanced_uses:openai_advanced_uses):
+        self.app_logger = st.session_state["app_logger"]
+        self.openai_advanced_uses = openai_advanced_uses
+        self.unavailable = False
+
+        self.setup_assistant()
+        self.setup_thread()
+        self.thread_buttons()
+
+        self.assistant_chat_interface()
+
+    def setup_assistant(self):
+            assistant_name_filter = st.session_state['tool_config']['assistant_configs']['assistant_name']
+            assistant_ids = [aid for aid in self.openai_advanced_uses.list_assistants() if aid[1] == assistant_name_filter]
+            
+            if assistant_ids:
+                selected_assistant = st.sidebar.selectbox("Select assistant", [name for _, name in assistant_ids])
+                self.assistant_id = next(id for id, name in assistant_ids if name == selected_assistant)
+                self.unavailable = False
+            else:
+                st.sidebar.write("No assistants available")
+                self.unavailable = True
+                self.starting_message = "You need to create an assistant in **🔧 Settings & Recovery** before you can use this tool"
+
+
+    def setup_thread(self):
+        thread_ids = self.app_logger.list_openai_threads()
+        if thread_ids:
+            selected_thread = st.sidebar.selectbox("Select thread", [name for _, name in thread_ids])
+            self.thread_id = next(id for id, name in thread_ids if name == selected_thread)
+            st.session_state['messages'] = self.app_logger.get_thread_history(self.thread_id)
+            self.starting_message = f"Ask anything to the thread {selected_thread}"
+            self.unavailable = False
+        else:
+            st.sidebar.write("No threads available")
+            st.session_state['messages'] = []
+            message = "You need to create a thread using **📈 Generative Excel** before you can use this tool"
+            st.sidebar.warning(message)
+            self.starting_message = message
+            self.unavailable = True
+
+
+    def thread_buttons(self):
+        if not self.unavailable and st.sidebar.button("reset thread", use_container_width=True):
+            self.thread_id = self.openai_advanced_uses.reset_thread(self.thread_id)
+            st.session_state['messages'] = []
+
+        if not self.unavailable and st.sidebar.button("erase thread", use_container_width=True):
+            self.thread_id = self.openai_advanced_uses.erase_thread(self.thread_id)
+            st.session_state['messages'] = []
+
+        
+        
+    def assistant_chat_interface(self):  
+
+        for message in st.session_state['messages']:
+            with st.chat_message(message["role"]):
+                for item in message["items"]:
+                    item_type = item["type"]
+                    if item_type == "text":
+                        st.markdown(item["content"])
+                    elif item_type == "image":
+                        for image in item["content"]:
+                            st.html(image)
+                    elif item_type == "code_input":
+                        with st.status("Code", state="complete"):
+                            st.code(item["content"])
+                    elif item_type == "code_output":
+                        with st.status("Results", state="complete"):
+                            st.code(item["content"])
+
+        if message_content := st.chat_input(self.starting_message, disabled=self.unavailable):
+
+            st.session_state['messages'].append({"role": "user",
+                                            "items": [
+                                                {"type": "text", 
+                                                "content": message_content
+                                                }]})
+            
+            self.openai_advanced_uses.post_message(self.thread_id, message_content)
+
+
+            with st.chat_message("user"):
+                st.markdown(message_content)
+
+            with st.chat_message("assistant"):
+                stream = self.openai_advanced_uses.stream_response(self.thread_id, self.assistant_id)
+
+                assistant_output = []
+
+                for event in stream:
+
+                    if isinstance(event, ThreadRunStepCreated):
+                        if event.data.step_details.type == "tool_calls":
+                            assistant_output.append({"type": "code_input", "content": ""})
+                            code_input_expander = st.status("Writing code ⏳ ...", expanded=True)
+                            code_input_block = code_input_expander.empty()
+
+                    elif isinstance(event, ThreadRunStepDelta):
+                        if hasattr(event.data.delta.step_details, 'tool_calls'):
+                            tool_calls = event.data.delta.step_details.tool_calls
+                            if tool_calls and tool_calls[0].code_interpreter:
+                                code_interpreter = tool_calls[0].code_interpreter
+                                code_input_delta = code_interpreter.input
+                                if code_input_delta:
+                                    assistant_output[-1]["content"] += code_input_delta
+                                    code_input_block.empty()
+                                    code_input_block.code(assistant_output[-1]["content"])
+
+                    elif isinstance(event, ThreadRunStepCompleted):
+                        if hasattr(event.data.step_details, 'tool_calls'):
+                            tool_calls = event.data.step_details.tool_calls
+                            if tool_calls:
+                                code_interpreter = tool_calls[0].code_interpreter
+                                if code_interpreter.outputs:
+                                    code_input_expander.update(label="Code", state="complete", expanded=False)
+                                    try:
+                                        output = code_interpreter.outputs[0]
+
+                                        if isinstance(output, CodeInterpreterOutputImage):
+                                            image_html_list = []
+                                            for output in code_interpreter.outputs:
+                                                image_file_id = output.image.file_id
+                                                image_data = self.openai_advanced_uses.openai_download_file(image_file_id)
+                                                image_folder = f"{self.app_logger.openai_threads_folder}/{self.thread_id}"
+                                                os.makedirs(image_folder, exist_ok=True)
+                                                image_path = f"{self.app_logger.openai_threads_folder}/{self.thread_id}/{image_file_id}.png"
+                                                with open(image_path, "wb") as file:
+                                                    file.write(image_data)
+
+                                                with open(image_path, "rb") as file_:
+                                                    data_url = base64.b64encode(file_.read()).decode("utf-8")
+
+                                                image_html = f'<p align="center"><img src="data:image/png;base64,{data_url}" width=600></p>'
+                                                st.html(image_html)
+                                                image_html_list.append(image_html)
+
+                                            assistant_output.append({"type": "image", "content": image_html_list})
+
+                                        elif isinstance(output, CodeInterpreterOutputLogs):
+                                            code_output = output.logs
+                                            assistant_output.append({"type": "code_output", "content": code_output})
+                                            with st.status("Results", state="complete"):
+                                                st.code(code_output)
+                                    except Exception as e:
+                                        print(f"No outputs from code interpreter: {e}")
+                                    finally:
+                                        code_input_expander.update(label="Code", state="complete", expanded=False)
+                                else:
+                                    code_input_expander.update(label="Code", state="complete", expanded=False)
+
+                    elif isinstance(event, ThreadMessageCreated):
+                        assistant_output.append({"type": "text", "content": ""})
+                        assistant_text_box = st.empty()
+
+                    elif isinstance(event, ThreadMessageDelta):
+                        if isinstance(event.data.delta.content[0], TextDeltaBlock):
+                            new_text = event.data.delta.content[0].text.value or ""
+                            last_output = assistant_output[-1] if assistant_output else {"type": "text", "content": ""}
+                            last_output["content"] += new_text
+                            if not assistant_output:
+                                assistant_output.append(last_output)
+                            assistant_text_box.markdown(last_output["content"])
+                
+            st.session_state['messages'].append({"role": "assistant", "items": assistant_output})
+            self.app_logger.update_thread_history(st.session_state['messages'],self.thread_id)
