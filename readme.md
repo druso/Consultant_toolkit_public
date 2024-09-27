@@ -20,8 +20,6 @@ Don't forget to take not of your  **session_id**! It's your key 🔑 to retrievi
 
 ## 📈 Generative Excel
 
-[🔗Jump there](/Generative_Excel)
-
 This let's you load a csv or an excel and run bulk operations on it. Once you'll load a file you can navigate through the tabs to access different functions.
 
 * **LLM**
@@ -40,14 +38,21 @@ This let's you load a csv or an excel and run bulk operations on it. Once you'll
 * **Amazon**
  Here you can retrieve product information or reviews from amazon, providing ASINs code. Much more can be added, feel free to take a look at oxylabs documentation. [🔗check out the endless opportunities](https://oxylabs.io/products/scraper-api/ecommerce) 
 
+* **Assistant Setup**
+ Here you can prepare create an assistant using the file that is being processed. You will be able to use the assistant in the 🤖 My Assistants section
+
+* **Table Handler**
+ Here you can make operations on the file (like drop columns...)  
 
 You can keep working on the file by switching to different tabs so you can cuncatenate different requests. For example you can requests organic search results from serpAPI, crawl the results with the crawler and finally run an LLM to summarize the contents of the websites.
 
 **Pro Tip**: some requests return structured data (like serpAPI), you can unroll the structured data using the "Colum Expander" function below the Preview of the table. Select the column to unroll and it will do the magic.
 
+## 🤖 My Assistants
+If you created an assistant using the 📈 Generative Excel you can use it here, it will help you in visualizing insights about the file you created
+
 ## 📋 Doc Assistant
 
-[Jump there](/Doc_Assistant)
 Here you can process any text document (word, txt, pdf) in order to quickly extract relevant information. Multiple documents can be uploaded at once. You follow these steps:
 * **Prepare the content**
  The file needs to be divided into smaller chunk. Default options should work for most needs, but you never know. If you want to tinker you can change the length of the chunk of text and the overlap between chunks. The longer the chunks the less precise the search activity will be.
@@ -62,11 +67,9 @@ Here you can process any text document (word, txt, pdf) in order to quickly extr
 
 ## 🎙️ Audio Transcriber
 
-[Jump there](/Audio_Transcriber)
 Here you can load an audio of speech, have it transcrived and summarized.
 You can change the behaviour of the summarization by optimizing the summarization prompt
 
 ## 💾 Session Recovery
 
-[Jump there](/Session_Recovery)
 Here you can download logs from any session. Partially executed files and entire logs of any api call is available to dowload from here in case needed.
