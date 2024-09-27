@@ -22,9 +22,8 @@ if st.session_state["authentication_status"]:
         request_constructor=DfRequestConstructor(st.session_state['processed_df'], st.session_state["app_logger"])
         return request_constructor
 
-    if user_df.empty:
-        st.write("## Load an excel or csv to start")
-    else:
+
+    if not user_df.empty:
         st.session_state["app_logger"].set_file_name(file_name)
         st.session_state["app_logger"].log_excel(user_df,"original")
         
