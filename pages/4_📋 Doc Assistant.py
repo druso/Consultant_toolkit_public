@@ -23,10 +23,7 @@ if st.session_state["authentication_status"]:
 
     user_doc, file_name = DataLoader("doc").load_user_file()
 
-    if not user_doc:
-        st.write("## Load a Document to start")
-
-    else: 
+    if user_doc:
         llm_manager = LlmManager("streamlit",st.session_state["app_logger"])
         st.write("1. First thing we need to chunk the text into more digestible bits")
         st.session_state['chunks_df'] = SingleRequestConstructor().text_chunker(user_doc, file_name,st.session_state['chunks_df'],)

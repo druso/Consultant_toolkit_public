@@ -20,12 +20,10 @@ if st.session_state["authentication_status"]:
     audio_transcriber = AudioTranscribe(st.session_state["app_logger"])
     transcript = ""
 
-    tabs= st.tabs(["Transcribe","Summarize"])
-    with tabs[0]:
-        if not uploaded_file:
-            st.write("## Load an audio file to start")
-
-        else: 
+    if uploaded_file:
+        
+        tabs= st.tabs(["Transcribe","Summarize"])
+        with tabs[0]: 
             if st.button("Transcribe!", use_container_width=True, type="primary"):
                 transcript = audio_transcriber.whisper_openai_transcribe(uploaded_file)
             st.text_area("Your Transcription",transcript,placeholder="The transcription will apper here")
@@ -36,19 +34,19 @@ if st.session_state["authentication_status"]:
                     file_name="sample_text.txt",
                     mime="text/plain"
                 )
-        
-    with tabs[1]:
-        if not transcript:
-            st.write("Transcribe something first")
+            
+        with tabs[1]:
+            if not transcript:
+                st.write("Transcribe something first")
 
-        else:
-            SingleRequestConstructor().llm_summarize(transcript, llm_manager)
-            st.download_button(
-                    label="Download Text File",
-                    data=transcript.encode('utf-8'),  # Convert the string to bytes
-                    file_name="sample_text.txt",
-                    mime="text/plain"
-                )
+            else:
+                SingleRequestConstructor().llm_summarize(transcript, llm_manager)
+                st.download_button(
+                        label="Download Text File",
+                        data=transcript.encode('utf-8'),  # Convert the string to bytes
+                        file_name="sample_text.txt",
+                        mime="text/plain"
+                    )
 
 elif st.session_state["authentication_status"] is False:
     st.error('Username/password is incorrect')

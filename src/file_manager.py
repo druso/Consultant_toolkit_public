@@ -81,7 +81,8 @@ class DataLoader:
         self.accept_multiple_files =  self.configurations[config_key].get('accept_multiple_file', False)
         self.uploaded_file = st.sidebar.file_uploader("Choose a file", type=self.file_types, accept_multiple_files=self.accept_multiple_files)
         if not self.uploaded_file:
-            self.uploaded_file = st.file_uploader("Choose a file", type=self.file_types, key="Main Loader")
+            st.write ("## Upload a file using the widget in the sidebar to start")
+            #self.uploaded_file = st.file_uploader("Choose a file", type=self.file_types, accept_multiple_files=self.accept_multiple_files, key="Main Loader")
             
     def _dataframe_handler(self, uploaded_file) -> pd.DataFrame:
 
@@ -98,6 +99,8 @@ class DataLoader:
 
         concatenated_text = ""
         for uploaded_file in uploaded_files:
+            print (uploaded_file)
+            print ("I'mhere")
             try:
                 # Check the file extension to determine handling method
                 if uploaded_file.name.endswith('.txt'):
@@ -130,7 +133,7 @@ class DataLoader:
                     filename = self.uploaded_file.name
                 return content, filename
             else:
-                self.uploaded_file, self.uploaded_file.name
+                return self.uploaded_file, self.uploaded_file.name
         else:
             return self.default, None
 
