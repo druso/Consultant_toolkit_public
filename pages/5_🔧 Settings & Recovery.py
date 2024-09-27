@@ -1,5 +1,7 @@
 from src.file_manager import AppLogger
+from src.external_tools import openai_advanced_uses
 from src.setup import page_setup, page_footer
+from src.prompts import assistant_sys_prompt
 import streamlit as st
 import os
 
@@ -19,8 +21,10 @@ def handle_service_credentials(service, credential_manager):
 
 if st.session_state["authentication_status"]:
     credential_manager = st.session_state['credential_manager']
+    app_logger = AppLogger(st.session_state['username'])
 
-    st.title("API Keys Settings")
+
+    st.title("API Keys Settings")#########################################################################################
     services_list = credential_manager.get_services_list()
     os_uninitialized_services = [service for service in services_list if service['initialized'] != "os"]
     
@@ -31,10 +35,29 @@ if st.session_state["authentication_status"]:
 
     else:
         st.info("All API keys are already set. Give plenty of thanks to the webmaster for setting them up")
-
     st.divider()
-    st.title("Session Recovery")
-    app_logger = AppLogger()
+
+
+
+
+    st.title("Setup Assistant")#########################################################################################
+    st.write("If you don't have any assistant available in My Assistants, generate it here")
+    if st.button("Generate the openai assistant"):
+        openai = openai_advanced_uses(app_logger)
+        assistant_configs=st.session_state['tool_config'].get('assistant_configs')
+        assistant_list = openai.list_assistants()
+        if any(assistant_configs['assistant_name'] == assistant[1] for assistant in assistant_list):
+            st.write(f"An assistant with the same name already exists: {assistant_configs['assistant_name']}")
+        else:
+            assistant_configs['assistant_sys_prompt']=assistant_sys_prompt
+            assistant = openai.create_assistant(assistant_configs)
+            st.write(f"Assistant created with id {assistant.id}")
+    st.divider()
+
+
+
+
+    st.title("Session Recovery")#########################################################################################
 
     st.write("""Something broke along the way? 
             Something messed up the operations? 
@@ -43,20 +66,20 @@ if st.session_state["authentication_status"]:
             Select your session_id and download the processed files or requests logs. May be able to recover something""")
 
     # List all subfolders in the main directory
-    session_ids = app_logger.list_logs()
-    selected_session_id = st.selectbox('Select a session_id', session_ids)
+    
+    logs_folder = st.selectbox('Select the type of log', [app_logger.files_folder,app_logger.requests_folder])
 
-    if selected_session_id:
-        logs_type = app_logger.list_logs(selected_session_id)
-        selected_logs_type = st.selectbox('Select a Nested Folder', logs_type)
+    if logs_folder:
+        available_logs = app_logger.list_subfolders(logs_folder)
+        selected_logs_folder = st.selectbox('Select a folder', available_logs)
 
-        if selected_logs_type:
+        if selected_logs_folder:
             if st.button('Prepare the ZIP', use_container_width=True,):
-                zip_file = app_logger.zip_logs(selected_session_id, selected_logs_type)
+                zip_file = app_logger.zip_directory(logs_folder+"/"+selected_logs_folder)
                 st.download_button(
                     label="Download",
                     data=zip_file,
-                    file_name=f"{selected_session_id}_{selected_logs_type}.zip",
+                    file_name=f"{selected_logs_folder}.zip",
                     mime="application/zip",
                     use_container_width=True, 
                     type='primary'

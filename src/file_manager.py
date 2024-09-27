@@ -1,7 +1,6 @@
 import streamlit as st
 from io import BytesIO
 import pandas as pd
-from pandas import json_normalize
 import json
 import textract
 import os
@@ -13,34 +12,55 @@ from typing import Tuple, Any, Optional, List
 
 
 
+def unroll_json(df: pd.DataFrame, column_name: str) -> pd.DataFrame:
+    """
+    Unrolls (flattens) JSON data within a specified column of a DataFrame.
+    Skips rows that are not valid JSON.
+
+    Args:
+        df (pd.DataFrame): The DataFrame containing the JSON data.
+        column_name (str): The name of the column containing the JSON data.
+
+    Returns:
+        pd.DataFrame: The unrolled DataFrame or the original DataFrame if an error occurs.
+    """
+    def explode_and_normalize(data):
+        if isinstance(data, list):
+            return pd.DataFrame(data)
+        elif isinstance(data, dict):
+            return pd.json_normalize(data)
+        else:
+            return None
+
+    result_rows = []
+    for index, row in df.iterrows():
+        try:
+            json_data = row[column_name]
+            if isinstance(json_data, str):
+                json_data = json.loads(json_data)
+            
+            expanded_data = explode_and_normalize(json_data)
+            if expanded_data is not None:
+                for _, expanded_row in expanded_data.iterrows():
+                    new_row = row.drop(column_name).to_dict()
+                    new_row.update(expanded_row)
+                    result_rows.append(new_row)
+            else:
+                result_rows.append(row.to_dict())
+        except Exception as e:
+            print(f"Error processing row {index}: {e}")
+            result_rows.append(row.to_dict())
+
+    result_df = pd.DataFrame(result_rows)
+    return result_df
 
 
 class DataLoader:
     """
-    Facilitates the uploading and processing of various file types within a Streamlit application.
-
-    The class is designed to handle different configurations of file types 
-    ('dataframe', 'doc', 'audio', etc.) and their associated processing logic. 
-
-    Attributes:
-        configurations (dict): Defines valid configuration keys and their associated 
-                               file extensions, handlers (for processing), and default values.
-        file_types (list): A list of allowed file extensions based on the chosen configuration.
-        handler (callable or None): The function to call for processing the uploaded file.
-        default: The default value to use if no file is uploaded.
-        uploaded_file (file-like or None): The uploaded file object from the Streamlit sidebar.
+    Handles the loading of file into the application
     """
     def __init__(self, config_key: str):
-        """
-        Initializes the DataLoader and attempts to upload a file.
 
-        Args:
-            config_key (str): The key specifying the data handling configuration 
-                              (e.g., 'dataframe', 'doc', 'audio').
-        
-        Raises:
-            ValueError: If the `config_key` is invalid (not found in configurations).
-        """
         self.configurations = {
             "dataframe": {'extensions': ['csv', 'xls', 'xlsx'], 
                           'handler': self._dataframe_handler, 
@@ -63,29 +83,8 @@ class DataLoader:
         if not self.uploaded_file:
             self.uploaded_file = st.file_uploader("Choose a file", type=self.file_types, key="Main Loader")
             
-
-
     def _dataframe_handler(self, uploaded_file) -> pd.DataFrame:
-        """
-        Processes uploaded files and loads them into a pandas DataFrame.
 
-        This method handles CSV, XLS, and XLSX files. If the file cannot be loaded 
-        or an unsupported format is provided, the default value for dataframes 
-        (an empty pandas DataFrame) is returned.
-
-        Args:
-            uploaded_file (file-like object): The file object uploaded by the user.
-
-        Returns:
-            pd.DataFrame: The loaded pandas DataFrame, or the default (empty) DataFrame 
-                          if loading fails or an unsupported format is encountered.
-
-        Raises:
-            FileNotFoundError: If the specified file cannot be found.
-            pd.errors.ParserError: If there's an issue parsing the CSV or Excel file.
-            pd.errors.EmptyDataError: If the file is empty.
-            # Other potential pandas errors might need to be listed here as well.
-        """
         try:
             if uploaded_file.name.endswith('.csv'):
                 return pd.read_csv(uploaded_file)
@@ -97,26 +96,6 @@ class DataLoader:
         
     def _doc_handler(self, uploaded_files) -> str:
 
-        """
-        Extracts text content from uploaded document files.
-
-        Handles both plain text (.txt) files by direct reading and other document types (e.g., .pdf, .docx)
-        using the `textract` library. If extraction fails or an unsupported file format is provided, 
-        the default value (an empty string) is returned.
-
-        Args:
-            uploaded_files (list of file-like objects): The file objects uploaded by the user.
-
-        Returns:
-            str: The concatenated text content from all files, or an empty string if extraction fails
-                or the file format is unsupported.
-        
-        Raises:
-            FileNotFoundError: If the specified file cannot be found.
-            textract.exceptions.MissingFileError: If textract cannot locate the file.
-            textract.exceptions.UnsupportedFileTypeError: If textract does not support the file type.
-            # Other potential textract exceptions you might want to catch explicitly
-        """
         concatenated_text = ""
         for uploaded_file in uploaded_files:
             try:
@@ -141,23 +120,7 @@ class DataLoader:
         return concatenated_text
 
     def load_user_file(self) -> Tuple[Any, Optional[str]]:
-        """
-        Processes the uploaded file (if any) using the appropriate handler.
 
-        If a file has been uploaded and a handler is defined for the selected configuration, 
-        the handler is called to process the file content. Otherwise, the uploaded file object
-        and its name are returned directly. If no file is uploaded, the default value for the 
-        configuration and `None` (for filename) are returned.
-
-        In case of documents it will support multiple files to be uploaded (but won't be able to track their name for now)
-
-        Returns:
-            Tuple[Any, Optional[str]]: A tuple containing:
-                - The processed content (if a handler exists and a file was uploaded),
-                the uploaded file object itself (if no handler exists),
-                or the default value (if no file was uploaded).
-                - The filename (if a file was uploaded) or None (if no file was uploaded).
-        """
         if self.uploaded_file is not None:
             if self.handler:
                 content = self.handler(self.uploaded_file)
@@ -175,114 +138,56 @@ class DataLoader:
 
 
 
-
-class DataUtilities:
+class AppLogger() :
     """
-    Provides utility functions for working with Pandas DataFrames.
-
-    Includes methods for:
-        - Converting DataFrames to Excel format (bytes).
-        - Unrolling JSON data embedded within a DataFrame column.
+    Handles most of I/O operations for storing the activities
     """
+    def __init__(self, user_id: str):
+        """Initializes the logger with a session ID and default values."""
+        self.session_id = datetime.now().strftime('%y%m%d') +"_"+ str(uuid.uuid4())[:6]
+        self.file_name = "default"
+        
+        self.logs_folder = f"logs/{user_id}"
+        self.log_types = ["files", "requests", "openai_threads"]
+        
+        for log_type in self.log_types:
+            folder = os.path.join(self.logs_folder, log_type)
+            os.makedirs(folder, exist_ok=True)
+            setattr(self, f"{log_type}_folder", folder)
 
+    def set_file_name(self, file_name: str):
+        self.file_name = file_name 
 
-    def __init__(self):
-        pass
+    def session_files_folder(self):
+        folder = os.path.join(self.files_folder, self.session_id)
+        os.makedirs(folder, exist_ok=True)
+        return folder
+    
+    def list_subfolders(self, folder_path: str) -> List[str]:
+        return [f for f in os.listdir(folder_path) if os.path.isdir(os.path.join(folder_path, f))]
+
+    def zip_directory(self, folder_path: str) -> BytesIO:
+        byte_io = BytesIO()
+        with zipfile.ZipFile(byte_io, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for root, _, files in os.walk(folder_path):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    zipf.write(file_path, os.path.relpath(file_path, folder_path))
+        byte_io.seek(0)
+        return byte_io
 
     def to_excel(self, df: pd.DataFrame) -> bytes:
-        """
-        Converts a Pandas DataFrame to Excel format (bytes).
-
-        Args:
-            df (pd.DataFrame): The DataFrame to convert.
-
-        Returns:
-            bytes: The Excel file content as bytes.
-        """
+ 
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='Sheet1')
         # No need to call writer.save()
         processed_data = output.getvalue()
         return processed_data
-    
-    def unroll_json_in_dataframe(self, df: pd.DataFrame, column_name: str) -> pd.DataFrame:
-        """
-        Unrolls (flattens) JSON data within a specified column of a DataFrame.
-        Skips rows that are not valid JSON.
-
-        Args:
-            df (pd.DataFrame): The DataFrame containing the JSON data.
-            column_name (str): The name of the column containing the JSON data.
-
-        Returns:
-            pd.DataFrame: The unrolled DataFrame or the original DataFrame if an error occurs.
-        """
-        def explode_and_normalize(data):
-            if isinstance(data, list):
-                return pd.DataFrame(data)
-            elif isinstance(data, dict):
-                return pd.json_normalize(data)
-            else:
-                return None
-
-        result_rows = []
-        for index, row in df.iterrows():
-            try:
-                json_data = row[column_name]
-                if isinstance(json_data, str):
-                    json_data = json.loads(json_data)
-                
-                expanded_data = explode_and_normalize(json_data)
-                if expanded_data is not None:
-                    for _, expanded_row in expanded_data.iterrows():
-                        new_row = row.drop(column_name).to_dict()
-                        new_row.update(expanded_row)
-                        result_rows.append(new_row)
-                else:
-                    result_rows.append(row.to_dict())
-            except Exception as e:
-                print(f"Error processing row {index}: {e}")
-                result_rows.append(row.to_dict())
-
-        result_df = pd.DataFrame(result_rows)
-        return result_df
 
 
 
-
-
-
-class AppLogger() :
-    """
-    Handles logging and retrieval of data during an application session.
-
-    This class manages the storage and organization of logs related to Excel files, 
-    API requests, or any other data you choose to store. It uses a session-based folder structure
-    for better organization, with each session having its own unique ID.
-
-    Attributes:
-        session_id (str): Unique ID for the current session, used for folder creation.
-        file_name (str): Default filename for logged Excel files (can be changed).
-        logs_folder (str): Root directory where session-specific logs are stored.
-    """
-    def __init__(self):
-        """Initializes the logger with a session ID and default values."""
-        self.session_id = datetime.now().strftime('%y%m%d') +"_"+ str(uuid.uuid4())[:6]
-        self.file_name = "default"
-        self.logs_folder="logs"
-        pass
-
-    def set_file_name(self, file_name: str):
-        """
-        Sets the filename to be used when logging Excel files.
-
-        Args:
-            file_name (str): The new filename to use.
-        """
-        self.file_name = file_name 
-
-    def log_excel(self, df: pd.DataFrame, version: str = "processed") -> None:
+    def log_excel(self, df: pd.DataFrame, version: str = "processed", return_path = False) -> None:
         """
         Saves a Pandas DataFrame to an Excel file within the session's logs folder.
 
@@ -290,14 +195,15 @@ class AppLogger() :
             df (pd.DataFrame): The DataFrame to save.
             version (str, optional): A string to include in the filename, indicating
                 the data version (e.g., "raw", "processed"). Defaults to "processed".
+            return_path: if True the function returns the path where the file was saved
         """
-        folder = f"{self.logs_folder}/{self.session_id}/generative_excel"
-        if not os.path.exists(folder):
-            os.makedirs(folder)
-        excel=DataUtilities().to_excel(df)
-        with open(f"{folder}/{version}_{self.file_name}.xlsx", "wb") as f:
-            f.write(excel)
-        pass
+        folder = self.session_files_folder()
+        os.makedirs(folder, exist_ok=True)
+        path=f"{folder}/{version}_{self.file_name.split('.', 1)[0]}.xlsx"
+        with open(path, "wb") as f:
+            f.write(self.to_excel(df))
+        if return_path:
+            return path
 
     def save_request_log(self, response: dict, service: str, calltype: str) -> None:
         """
@@ -308,69 +214,97 @@ class AppLogger() :
             service (str): The name of the service or API being called.
             calltype (str): A descriptor for the type of API call (e.g., "query", "update").
         """
-        folder = f"{self.logs_folder}/{self.session_id}/requests/{service}"
-        if not os.path.exists(folder):
-            os.makedirs(folder)
+        folder = os.path.join(self.requests_folder, service)
+        os.makedirs(folder, exist_ok=True)
+
+        timestamp = datetime.now().strftime('%m%d%H%M%S')
+
+        max_length = 50 
+        filename = f"{calltype}_{timestamp}"
+        cleaned_filename = filename[:max_length]
+        cleaned_filename = ''.join(c for c in cleaned_filename if c.isalnum() or c in ('_', '-'))
+
+        if cleaned_filename != filename:
+            print(f"Filename cleaned from '{filename}' to '{cleaned_filename}'")
 
         try:
             # Attempt to save as JSON
-            with open(f"{folder}/{calltype}_{datetime.now().strftime('%m%d%H%M%S')}.json", "w") as f:
+            with open(f"{folder}/{cleaned_filename}.json", "w") as f:
                 json.dump(response, f, indent=4)
         except TypeError:
-            response = str(response)
-            with open(f"{folder}/{calltype}_{datetime.now().strftime('%m%d%H%M%S')}.txt", "w") as f:
-                f.write(response)
+            # If JSON serialization fails, save as text
+            with open(f"{folder}/{cleaned_filename}.txt", "w") as f:
+                f.write(str(response))
 
-    def list_logs(self, log: str = None) -> List[str]:
+    def log_openai_thread(self, thread_id: str, thread_name: str, thread_file_ids: List[str], thread_history: List[dict], user_setup_msg: str, assistant_setup_msg:str):
+        thread_file = {
+            "thread_id":thread_id,
+            "thread_name":thread_name,
+            "file_ids":thread_file_ids,
+            "user_setup_msg":user_setup_msg,
+            "assistant_setup_msg":assistant_setup_msg,
+            "thread_history":thread_history,
+        }
+        
+        with open(f"{self.openai_threads_folder}/{thread_id}.json", "w") as f:
+            json.dump(thread_file, f, indent=4)
+
+
+    def list_openai_threads(self):
         """
-        Lists the session directories or specific logs under a given session.
-
-        Args:
-            log (str, optional): The specific log type to list (e.g., "requests"). If None,
-                                lists all session directories.
+        Lists all OpenAI threads stored in the openai_threads_folder.
 
         Returns:
-            List[str]: A list of session IDs or log file/folder names.
+            List[Tuple[str, str]]: A list of tuples, each containing (thread_id, thread_name).
         """
-        path = self.logs_folder if log is None else os.path.join(self.logs_folder, log)
-        return [f for f in os.listdir(path) if os.path.isdir(os.path.join(path, f))]    
-
-    def zip_directory(self, folder_path: str) -> BytesIO:
-        """
-        Zips the contents of a directory into a byte stream.
-
-        Args:
-            folder_path (str): The path to the directory to be zipped.
-
-        Returns:
-            BytesIO: An in-memory byte stream containing the zipped directory.
-
-        Raises:
-            FileNotFoundError: If the specified folder doesn't exist.
-        """
-        byte_io = BytesIO()
-        with zipfile.ZipFile(byte_io, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for root, _, files in os.walk(folder_path):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    zipf.write(file_path, os.path.relpath(file_path, folder_path))
-        byte_io.seek(0)
-        return byte_io
+        thread_list = []
+        for filename in os.listdir(self.openai_threads_folder):
+            file_path = os.path.join(self.openai_threads_folder, filename)
+            if os.path.isfile(file_path) and filename.endswith('.json'):
+                thread_name=""
+                thread_id=""
+                try:
+                    with open(file_path, 'r') as f:
+                        thread_data = json.load(f)
+                        thread_name = thread_data.get('thread_name', thread_name)
+                        thread_id = thread_data.get('thread_id', thread_id)
+                    if id: 
+                        thread_list.append((thread_id, thread_name))
+                except json.JSONDecodeError:
+                    print(f"Error reading JSON file: {filename}")
+                except Exception as e:
+                    print(f"Error processing file {filename}: {str(e)}")
+ 
+        return thread_list
     
-    def zip_logs(self, selected_session_id: str, selected_logs_type: str) -> BytesIO:
-        """
-        Zips the logs of a specific type from a selected session.
 
-        Args:
-            selected_session_id (str): The ID of the session whose logs are to be zipped.
-            selected_logs_type (str): The type of logs to zip (e.g., "requests", "generative_excel").
+    def get_thread_info(self, thread_id):
+        file_path = os.path.join(self.openai_threads_folder, thread_id + ".json")
+        try:
+            with open(file_path, 'r') as f:
+                thread_data = json.load(f)
+                return thread_data
+        except:
+            st.error(f"thread log for thread id: {thread_id} does not exist")
 
-        Returns:
-            BytesIO: An in-memory byte stream containing the zipped logs.
+    def get_thread_history(self, thread_id):
+        thread_file = self.get_thread_info(thread_id)
+        return thread_file.get("thread_history", [])
+    
+    def update_thread_history(self,thread_history,thread_id):
+        thread_file = self.get_thread_info(thread_id)
+        thread_file["thread_history"] = thread_history
+        with open(f"{self.openai_threads_folder}/{thread_id}.json", "w") as f:
+            json.dump(thread_file, f, indent=4)
 
-        Raises:
-            FileNotFoundError: If the specified session or log type folder doesn't exist.
-        """
-        folder = f"{self.logs_folder}/{selected_session_id}/{selected_logs_type}"
-        zipped_logs = self.zip_directory(folder)
-        return zipped_logs
+
+
+    def erase_thread_data(self, thread_id):
+        file_path = os.path.join(self.openai_threads_folder, thread_id + ".json")
+        try:
+            os.remove(file_path)
+            st.success(f"Thread data for thread id: {thread_id} has been deleted.")
+        except FileNotFoundError:
+            print(f"Thread log for thread id: {thread_id} does not exist.")
+        except Exception as e:
+            print(f"Error deleting thread log: {e}")
