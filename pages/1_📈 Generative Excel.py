@@ -1,6 +1,6 @@
-from src.file_manager import DataLoader, DataUtilities
-from src.external_tools import LlmManager, SerpApiManager, WebScraper, OxyLabsManager
-from src.request_processor import DfRequestConstructor
+from src.file_manager import DataLoader, unroll_json
+from src.external_tools import LlmManager, SerpApiManager, WebScraper, OxyLabsManager, openai_advanced_uses
+from src.request_processor import DfRequestConstructor, openai_thread_setup
 from src.setup import page_setup, page_footer
 import streamlit as st
 import pandas as pd
@@ -44,14 +44,14 @@ if st.session_state["authentication_status"]:
         serpapi_manager = SerpApiManager(st.session_state["app_logger"])
         web_scraper = WebScraper(st.session_state["app_logger"])
         oxylabs_manager = OxyLabsManager(st.session_state["app_logger"])
-        utilities = DataUtilities()
+        openai_advance_manager = openai_advanced_uses(st.session_state["app_logger"])
         st.sidebar.divider()
         if st.sidebar.button('Reset Processing', use_container_width=True, help="Will restore the file to the originally uploaded file"):
             request_constructor = reset_process()
 
         
 
-        tabs = st.tabs(["LLM", "SerpAPI", "Crawler", "Amazon", "Table Handler"])
+        tabs = st.tabs(["LLM", "SerpAPI", "Crawler", "Amazon", "Assistant Setup", "Table Handler"])
         with tabs[0]:        
             st.session_state['processed_df'] = request_constructor.llm_request_single_column(llm_manager)
         with tabs[1]:
@@ -61,6 +61,9 @@ if st.session_state["authentication_status"]:
         with tabs[3]:
             st.session_state['processed_df'] = request_constructor.oxylabs_request_single_column(oxylabs_manager)
         with tabs[4]:
+            st.write("## Assistant Setup - Work in Progress")
+            openai_thread_setup(openai_advance_manager).streamlit_interface(st.session_state['processed_df'])
+        with tabs[5]:
             st.session_state['processed_df'] = request_constructor.df_handler()
 
 
@@ -76,7 +79,7 @@ if st.session_state["authentication_status"]:
                                             options=st.session_state['processed_df'].columns.tolist(),
                                             help="The column where you have structured content that needs to be unrolled")
             if st.button("expand column objects"):
-                st.session_state['processed_df'] = utilities.unroll_json_in_dataframe(st.session_state['processed_df'],expander_msg_column)
+                st.session_state['processed_df'] = unroll_json(st.session_state['processed_df'],expander_msg_column)
         
         st.dataframe(st.session_state['processed_df'], use_container_width=True, hide_index=True,)
         st.session_state["app_logger"].log_excel(user_df)
@@ -85,7 +88,7 @@ if st.session_state["authentication_status"]:
 
         
         st.session_state["app_logger"].log_excel(st.session_state['processed_df'])
-        df_excel = utilities.to_excel(st.session_state['processed_df'])
+        df_excel = st.session_state["app_logger"].to_excel(st.session_state['processed_df'])
         st.download_button(
             label="Download Excel file",
             data=df_excel,
