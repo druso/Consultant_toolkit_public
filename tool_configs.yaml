@@ -1,5 +1,5 @@
 # If True will require login to use the toolkit, credentials are set in user_config.yaml
-require_login: False
+require_login: True
 
 
 # Set to true to use the service.
