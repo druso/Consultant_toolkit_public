@@ -119,7 +119,7 @@ def user_login():
             
     else:
         st.session_state["authentication_status"] = True
-        st.session_state["user"] = "anonymous"
+        st.session_state["username"] = "anonymous"
 
 
 
@@ -143,7 +143,7 @@ def page_setup(page_config):
  
 
         if "app_logger" not in st.session_state:
-            st.session_state["app_logger"] = AppLogger(st.session_state['name'])
+            st.session_state["app_logger"] = AppLogger(st.session_state['username'])
             
         st.sidebar.write(f"Your session id: {st.session_state['app_logger'].session_id}")    
 
