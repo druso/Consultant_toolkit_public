@@ -5,7 +5,7 @@ import streamlit as st
 import os
 
 page_config = {'page_title':"My Assistants",
-          'page_icon':"💾",}
+          'page_icon':"🤖",}
 
 page_setup(page_config)
 
