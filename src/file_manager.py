@@ -15,15 +15,28 @@ from typing import Tuple, Any, Optional, List
 def unroll_json(df: pd.DataFrame, column_name: str) -> pd.DataFrame:
     """
     Unrolls (flattens) JSON data within a specified column of a DataFrame.
-    Skips rows that are not valid JSON.
-
+    Ensures that all columns have consistent types to avoid ArrowInvalid errors.
+    Applies vectorized operations where possible for better performance.
+    
     Args:
         df (pd.DataFrame): The DataFrame containing the JSON data.
         column_name (str): The name of the column containing the JSON data.
 
     Returns:
-        pd.DataFrame: The unrolled DataFrame or the original DataFrame if an error occurs.
+        pd.DataFrame: The unrolled DataFrame with consistent column types.
     """
+    
+    # Helper function to safely load JSON
+    def safe_json_loads(val):
+        try:
+            return json.loads(val) if isinstance(val, str) else val
+        except json.JSONDecodeError:
+            return None  # Handle invalid JSON by returning None
+
+    # Vectorized JSON loading for the specified column
+    df[column_name] = df[column_name].apply(safe_json_loads)
+
+    # Helper function to explode and normalize data
     def explode_and_normalize(data):
         if isinstance(data, list):
             return pd.DataFrame(data)
@@ -34,24 +47,26 @@ def unroll_json(df: pd.DataFrame, column_name: str) -> pd.DataFrame:
 
     result_rows = []
     for index, row in df.iterrows():
-        try:
-            json_data = row[column_name]
-            if isinstance(json_data, str):
-                json_data = json.loads(json_data)
-            
-            expanded_data = explode_and_normalize(json_data)
-            if expanded_data is not None:
-                for _, expanded_row in expanded_data.iterrows():
-                    new_row = row.drop(column_name).to_dict()
-                    new_row.update(expanded_row)
-                    result_rows.append(new_row)
-            else:
-                result_rows.append(row.to_dict())
-        except Exception as e:
-            print(f"Error processing row {index}: {e}")
+        json_data = row[column_name]
+
+        # Check if any value within the JSON data is a list or dict
+        expanded_data = explode_and_normalize(json_data)
+        if expanded_data is not None:
+            for _, expanded_row in expanded_data.iterrows():
+                new_row = row.drop(column_name).to_dict()  # Drop the original JSON column
+                new_row.update(expanded_row)  # Update the row with exploded data
+                result_rows.append(new_row)
+        else:
+            # Straight values are left as-is
             result_rows.append(row.to_dict())
 
     result_df = pd.DataFrame(result_rows)
+
+    # Ensure consistent type across all columns (convert lists and non-lists to lists)
+    for col in result_df.columns:
+        if any(isinstance(i, list) for i in result_df[col]):
+            result_df[col] = result_df[col].apply(lambda x: x if isinstance(x, list) else [x])
+
     return result_df
 
 
