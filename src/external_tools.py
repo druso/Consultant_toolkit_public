@@ -1,4 +1,5 @@
 from src.file_manager import AppLogger
+import streamlit as st
 import openai
 import groq
 import streamlit as st
@@ -8,6 +9,8 @@ import os
 import requests
 import re
 import tiktoken
+from time import sleep
+from math import ceil
 #from transformers import AutoModel
 from bs4 import BeautifulSoup
 
@@ -192,7 +195,7 @@ class LlmManager:
         llm_temp (float): The temperature parameter for the LLM (only if 'streamlit' mode).
     """
 
-    def __init__(self, config_key: str, app_logger: AppLogger):
+    def __init__(self, config_key: str="streamlit", app_logger: AppLogger=None):
         """
         Initializes the LlmManager.
 
@@ -413,7 +416,7 @@ class SerpApiManager:
         self.base_url = "https://serpapi.com/search"
         pass
     
-    def extract_organic_results(self, search_query, num_results, country, lastyears=None):
+    def extract_organic_results(self, search_query, num_results, country, last_years=None):
         """Given a search_query and a num_result to provide it will return the organic first positions of the organic search
         The response will be a json with Position, Title, Link and Source for each result scraped.
         """
@@ -427,8 +430,8 @@ class SerpApiManager:
             'api_key': api_key,  # SerpApi API key
             'gl': country,
         }
-        if lastyears > 0:
-            params['tbs'] = f"qdr:y{lastyears}"
+        if last_years > 0:
+            params['tbs'] = f"qdr:y{last_years}"
 
         try:
             response = requests.get(self.base_url, params=params)
@@ -500,6 +503,8 @@ class OxyLabsManager():
         """Initialize the Oxylab Manager and set the url endpoints. API Key needs to be an env variable"""
         self.credential_manager = st.session_state['credential_manager']
         self.base_url = "https://realtime.oxylabs.io/v1/queries"
+        self.paginator_max_pages = 10
+        self.request_timeout = 90
         pass
 
     def _get_credentials(self):
@@ -514,59 +519,79 @@ class OxyLabsManager():
         if not username or not password:
             raise StopProcessingError("OxyLabs username or password is missing. Please set it in the **🔧 Settings & Recovery** page.")
         
-        return username, password
+        return username, password    
     
     
+    def _post_oxylab_request(self, payload):
+        """
+        Send a POST request to Oxylab's API with the given payload.
 
+        Args:
+            payload (dict): The request payload.
+
+        Returns:
+            requests.Response: The response object if successful.
+            str: An error message if the request fails.
+        """
+        username, password = self._get_credentials()
+
+        try:
+            response = requests.post(
+                'https://realtime.oxylabs.io/v1/queries',
+                auth=(username, password),
+                json=payload,
+                timeout=self.request_timeout
+            )
+            response.raise_for_status()
+            response_json = response.json()
+            self.save_request_log(response_json, "OxyLabs", f"{payload.get('source')}")
+            return response_json
+
+        except requests.Timeout:
+            raise RetryableError("Request timed out. Should Retry.")
+
+        except requests.ConnectionError:
+            raise RetryableError("Network connection error. Should Retry.")
+
+        except requests.HTTPError as e:
+            if e.response.status_code in [401, 403]:
+                raise StopProcessingError("Authentication failed. Please check your API credentials.")
+            elif e.response.status_code in [400, 422]:
+                raise SkippableError(f"Bad request: {e.response.text}. Skipping this request.")
+            else:
+                raise StopProcessingError(f"HTTP error occurred: {e.response.status_code} - {e.response.text}")
+
+        except requests.RequestException as e:
+            raise StopProcessingError(f"Failed to fetch content: {str(e)}")
+
+        except Exception as e:
+            raise StopProcessingError(f"An unexpected error occurred: {str(e)}")
+        
+    
     def _is_valid_asin(self, asin_str):
         """
         Checks if a string is a valid ASIN (Amazon Standard Identification Number).
-
-        Args:
-            asin_str: The string to check.
-
-        Returns:
-            True if the string is a valid ASIN, False otherwise.
         """
-
         # Regular expression pattern to match ASIN format
         pattern = r'^[A-Z0-9]{10}$'
-
         # Use re.match to check if the string matches the pattern
         return bool(re.match(pattern, asin_str))
     
 
-    def extract_amazon_product_info(self,asin,amazon_domain):
+    def get_amazon_product_info(self, asin, **kwargs):
         if not self._is_valid_asin(asin):
-            raise RetryableError(f"Invalid ASIN, it should contain 10 characters either int or letters: {asin[:20]}") 
-
-        username, password= self._get_credentials()
-
-        payload = {
-            "source": "amazon_product",  
-            "query": asin, 
-            "parse":True,
-            "domain":amazon_domain,
-        }
-
-        headers = {
-            "Content-Type": "application/json",
-        }
-        try:
-            response = requests.post(self.base_url, json=payload, auth=(username, password), headers=headers)
-            if response.status_code == 401:
-                raise StopProcessingError(f"Encountered a 401 Unauthorized Error: {response.text}") 
-            
-            response.raise_for_status()  # Raises an HTTPError for bad responses
-            response_json = response.json()
-            self.save_request_log(response_json, "OxyLabs", f"amazon_product_{amazon_domain}_{asin}")
+            raise SkippableError(f"Invalid ASIN, it should contain 10 characters either int or letters: {asin[:20]}") 
         
-        except StopProcessingError as e:
-            raise
-        except Exception as e:
-            raise RetryableError(f"Encountered an error: {e}")
+        payload = {
+            'source': 'amazon_product',
+            'parse': True,
+            'start_page': kwargs.get('start_page', 1)
+        }
+        payload['query'] = asin
+        payload['amazon_domain'] = kwargs.get('amazon_domain','it')
 
-        data = response.json()
+        data = self._post_oxylab_request(payload)
+
         extracted_data = {
             "num_variation": len(data['results'][0]['content'].get('variation',[])),
             "num_ads_on_page": len(data['results'][0]['content'].get('ads',[])),
@@ -582,102 +607,229 @@ class OxyLabsManager():
             "answered_questions_count": data['results'][0]['content'].get('answered_questions_count'),
             "reviews_count": data['results'][0]['content'].get('reviews_count'),
             }
-        
-        return json.dumps(extracted_data, indent=4)
-    
 
-    def extract_amazon_reviews(self,asin,amazon_domain, review_pages):
+        return extracted_data
+    
+    def get_amazon_review(self,asin, **kwargs ): 
+        """
+        Crawl Amazon product infosusing Oxylabs API.
+        Possible kwargs:
+        - amazon_domain: which amazon website to crawl
+        - start_page: starting page number (default 1)
+        """
         if not self._is_valid_asin(asin):
             raise SkippableError(f"Invalid ASIN, it should contain 10 characters either int or letters: {asin[:20]}") 
 
-        username, password= self._get_credentials()
-
         payload = {
-            "source": "amazon_reviews",  
-            "query": asin, 
-            "parse":True,
-            "domain":amazon_domain,
-            "start_page":1,
-            "pages": review_pages, 
+            'source': 'amazon_reviews',
+            'parse': True,
+            'start_page': kwargs.get('start_page', 1),
+            'query': asin,
         }
 
-        headers = {
-            "Content-Type": "application/json",
-        }
-        try:
-            response = requests.post(self.base_url, json=payload, auth=(username, password), headers=headers)
-            if response.status_code == 401:
-                raise StopProcessingError(f"Encountered a 401 Unauthorized Error: {response.text}") 
-            
-            response.raise_for_status()  # Raises an HTTPError for bad responses
-            response_json = response.json()
-            self.save_request_log(response_json, "OxyLabs", f"amazon_product_{amazon_domain}_{asin}")
-        
-        except StopProcessingError as e:
-            raise
-        except Exception as e:
-            raise RetryableError(f"Encountered an error: {e}")
+        payload['amazon_domain'] = kwargs.get('amazon_domain','it')
+        payload['pages'] = kwargs.get('pages',1)
 
-        data = response.json()
+        data = self._post_oxylab_request(payload)
         
         results = []
-        try:
-            for i in data['results'][0]['content']['reviews']:
-                review = {"rating":i["rating"], 
-                        "title":i["title"],
-                        "content":i["content"],
-                        "verified":i["is_verified"],
-                        "date_of_review":i["timestamp"],
-                        #"timestamp" : date_parser(i["timestamp"]),
-                        }
-                results.append(review)
-        except:
-            pass
-
-        return json.dumps(results, indent=4)
-
-    def generic_crawler(self, url):
         
-        username, password= self._get_credentials()
+        for result_set in data['results']:
+            try:
+                reviews = result_set['content']['reviews']
+                for review in reviews:
+                    processed_review = {
+                        "rating": review["rating"],
+                        "title": review["title"],
+                        "content": review["content"],
+                        "verified": review["is_verified"],
+                        "date_of_review": review["timestamp"],
+                        # "timestamp": date_parser(review["timestamp"]),
+                    }
+                    results.append(processed_review)
+            except KeyError as e:
+                print(f"KeyError: {e}. Skipping this result set.")
+            except Exception as e:
+                print(f"An unexpected error occurred: {e}. Skipping this result set.")
+
+    def web_crawler(self, url, **kwargs):
 
         payload = {
           'source': 'universal',
-          'render': 'html',
-          'user_agent_type': 'desktop_chrome',
-          'locale': 'it-it',
           'url': url
         }
+        
+        payload['render']= kwargs.get('render','html')
+        payload['user_agent_type']= kwargs.get('user_agent_type','desktop_chrome')
+        payload['locale']= kwargs.get('locale','it-it')
 
-        try:
-            response = requests.post(
-                'https://realtime.oxylabs.io/v1/queries',
-                auth=(username, password),
-                json=payload,
-                timeout=30  
-            )
-            response.raise_for_status()  
-            content = response.json()
+        content = self._post_oxylab_request(payload)
 
-            if 'results' not in content or not content['results']:
-                raise ValueError("No results found in the API response")
+        soup = BeautifulSoup(content["results"][0]["content"], 'html.parser')
 
-            self.save_request_log(content, "OxyLabs", f"crawler")
-            soup = BeautifulSoup(content["results"][0]["content"], 'html.parser')
+        text_elements = [tag.get_text(strip=True) for tag in soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'])]
+        clean_content = "\n".join(text_elements)
 
-            # Rest of the code remains the same
-            text_elements = [tag.get_text(strip=True) for tag in soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'])]
-            clean_content = "\n".join(text_elements)
+        return clean_content
 
-            return clean_content
+    def serp_crawler(self, query, **kwargs):
+        """
+        Crawl Google SERP using Oxylabs API.
+        - query: search query
 
-        except requests.RequestException as e:
-            print(f"Request failed: {e}")
-            return f"Error: Failed to fetch content - {str(e)}"
-        except (KeyError, IndexError, ValueError) as e:
-            print(f"Parsing error: {e}")
-            return f"Error: Failed to parse content - {str(e)}"
-        except Exception as e:
-            print(f"Unexpected error: {e}")
-            return f"Error: An unexpected error occurred - {str(e)}"
+        Possible kwargs:
+        
+        - domain: domain to search in
+        - start_page: starting page number (default 1)
+        - results_language: language of results
+        - geo_location: geographical location for search
+        """
 
-    ### Should extend oxylab and serpapi interfaces
+        payload = {
+            'source': 'google_search',
+            'parse': True,
+            'context': [{'key': 'filter', 'value': 1}],
+            'query':query
+        }
+
+        for key in [ 'domain', 'geo_location', 'pages']:
+            if key in kwargs:
+                payload[key] = kwargs[key]
+
+        if 'results_language' in kwargs:
+            payload['context'].append({'key': 'results_language', 'value': kwargs['results_language']})
+    
+        last_years = kwargs.get('last_years', 0)
+        if last_years > 0:
+            payload['context'].append({'key': 'tbs', 'value': f"qdr:y{kwargs['last_years']}"})
+
+        print (f"sending payload: \n{payload}")
+               
+
+        response = self._post_oxylab_request(payload)
+
+        
+        organic_results = response['results'][0]['content']['results']['organic']
+        page_number = response['results'][0]['content']['page']
+        total_results_number = response['results'][0]['content']['results']['search_information']['total_results_count']
+
+
+        # Format the results
+
+        formatted_results = []
+        total_results_number = 0
+
+        for result_set in response['results']:
+            organic_results = result_set['content']['results']['organic']
+            page_number = result_set['content']['page']
+            total_results_number = result_set['content']['results']['search_information']['total_results_count']
+
+            for result in organic_results:
+                
+                formatted_result = {
+                    "page_position": result['pos'],
+                    "page_number":page_number,
+                    "link": result['url'],
+                    "source": result.get('favicon_text', 'No source provided'),
+                    "title": result['title'],
+                    "snippet": result['desc'],
+                    "total_results_number": total_results_number,
+                }
+                formatted_results.append(formatted_result)
+            
+            return formatted_results
+    
+
+    def serp_paginator(self, query, num_results, fix_position=True, status_bar=False, **kwargs):
+        results = []
+        start_page = kwargs.get('start_page', 1)  # Allowing start_page to be set via kwargs
+        actual_num_results = num_results
+        min_results_per_page = 6  # Initial minimum
+        max_pages_per_request = kwargs.get('max_pages', self.paginator_max_pages)  # Renamed for clarity
+        max_retries = 3
+
+        # Initialize the status bar if status_bar is True
+        if status_bar:
+            status_text = st.empty()
+            progress_bar = st.progress(0)
+
+        while len(results) < actual_num_results:
+            remaining_results = actual_num_results - len(results)
+            pages_needed = ceil(remaining_results / min_results_per_page) if min_results_per_page > 0 else 1
+            pages_to_fetch = min(pages_needed, max_pages_per_request)
+
+            current_kwargs = kwargs.copy()
+            current_kwargs['pages'] = pages_to_fetch
+            current_kwargs['start_page'] = str(start_page)
+
+            # Update status bar
+            if status_bar:
+                status_text.text(f"Fetching results for '{query}' (Page {start_page} to {start_page + pages_to_fetch - 1})")
+                progress = len(results) / actual_num_results
+                progress_bar.progress(min(progress, 1.0))
+
+            retry_count = 0
+            while retry_count < max_retries:
+                try:
+                    page_results = self.serp_crawler(query, **current_kwargs)
+                    print(f"Fetched pages {start_page} to {start_page + pages_to_fetch - 1}")
+                    print(f"Received {len(page_results)} results")
+                    break
+                except RetryableError as e:
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        print(f"Retryable error occurred: {str(e)}. Retrying in 5 seconds... ({retry_count}/{max_retries})")
+                        if status_bar:
+                            status_text.text(f"Retrying... ({retry_count}/{max_retries})")
+                        sleep(5)
+                    else:
+                        print(f"Max retries reached for retryable error: {str(e)}")
+                        page_results = []
+                except SkippableError as e:
+                    print(f"Skippable error occurred: {str(e)}. Skipping pages {start_page} to {start_page + pages_to_fetch - 1}.")
+                    page_results = []
+                    break
+                except StopProcessingError:
+                    if status_bar:
+                        status_text.text("Error: Stopped processing")
+                        progress_bar.progress(1.0)
+                    print("Processing was stopped due to a StopProcessingError.")
+                    raise
+
+            if not page_results:
+                start_page += pages_to_fetch
+                continue
+
+            if not results:
+                total_results_number = page_results[0].get('total_results_number', actual_num_results)
+                if total_results_number < actual_num_results:
+                    actual_num_results = total_results_number
+                    print(f"Adjusted target to {actual_num_results} based on total_results_number")
+                actual_results_per_page = len(page_results) / pages_to_fetch if pages_to_fetch > 0 else 0
+                if actual_results_per_page > 0:
+                    min_results_per_page = max(int(actual_results_per_page), 1)  # Ensure at least 1
+                else:
+                    min_results_per_page = 1  # Fallback to 1 to prevent division by zero
+
+            results.extend(page_results)
+
+            if len(results) >= actual_num_results:
+                print(f"Terminating: Collected {len(results)} results (target: {actual_num_results})")
+                break
+
+            # Increment start_page for the next batch
+            start_page += pages_to_fetch
+
+        # Trim results to the exact number of results needed
+        results = results[:actual_num_results]
+
+        if fix_position:
+            for new_position, result in enumerate(results, start=1):
+                result['position'] = new_position
+
+        # Update status bar to show completion
+        if status_bar:
+            status_text.text(f"Finished fetching results for '{query}'")
+            progress_bar.progress(1.0)
+
+        return results

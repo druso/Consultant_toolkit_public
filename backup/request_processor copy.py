@@ -1,7 +1,6 @@
 from src.prompts import sysmsg_keyword_categorizer,sysmsg_review_analyst_template, sysmsg_summarizer_template
 
 from src.external_tools import LlmManager, StopProcessingError, RetryableError, SkippableError, openai_advanced_uses
-from src.file_manager import DataFrameProcessor
 import streamlit as st
 import pandas as pd
 import tiktoken
@@ -29,12 +28,12 @@ from openai.types.beta.threads.runs.code_interpreter_tool_call import (
 
     
 class DfRequestConstructor():
-    def __init__(self, df_processor:DataFrameProcessor, app_logger=None):
+    def __init__(self, df, app_logger=None):
         """
         Initialize the request constructor, by providing it the df
         """
-
-        self.df_processor = df_processor
+        self.df = df
+        self.available_columns = self.df.columns.tolist() 
         self.app_logger = app_logger
 
         self.bulk_sys_templates = {
@@ -44,6 +43,8 @@ class DfRequestConstructor():
             "Text Summarizer": sysmsg_summarizer_template,
         }
             
+    def _column_refresh(self):
+        self.available_columns = self.df.columns.tolist() 
     
     def _batch_requests(self, 
                         func, 
@@ -63,15 +64,15 @@ class DfRequestConstructor():
             """Process a single row, handling retries and errors."""
             for attempt in range(max_retries + 1):
                 try:
-                    value = self.df_processor.processed_df.loc[idx, query_column]
+                    value = self.df.loc[idx, query_column]
                     if pd.isna(value) or value is None or str(value).strip() == "":
                         e="Cannot process empty value"
-                        self.df_processor.processed_df.at[idx, response_column] = e
+                        self.df.at[idx, response_column] = e
                         raise SkippableError(e)
                     result = func(value, *args, **kwargs)
                     if force_string:
                         result = str(result)
-                    self.df_processor.processed_df.at[idx, response_column] = result
+                    self.df.at[idx, response_column] = result
                     break
                 except RetryableError as e:
                     if attempt < max_retries:
@@ -79,7 +80,7 @@ class DfRequestConstructor():
                         time.sleep(retry_delay)
                     else:
                         st.error(f"Retry limit reached for row {idx + 1}. Skipping.")
-                        self.df_processor.processed_df.at[idx, response_column] = f"Error: {e}"
+                        self.df.at[idx, response_column] = f"Error: {e}"
                 except StopProcessingError as e:
                     st.error(f"Error processing the request: {e}")
                     return False
@@ -97,12 +98,12 @@ class DfRequestConstructor():
                 return valid_indices[start_idx:end_idx]
 
         # Check if response column exists, create it if not
-        if response_column not in self.df_processor.processed_df.columns:
-            self.df_processor.processed_df[response_column] = pd.NA
+        if response_column not in self.df.columns:
+            self.df[response_column] = pd.NA
 
         # Create a mask to identify rows that need to be processed (have NaN in the response column)
-        mask = self.df_processor.processed_df[response_column].isna()
-        valid_indices = self.df_processor.processed_df[mask].index
+        mask = self.df[response_column].isna()
+        valid_indices = self.df[mask].index
 
         # Find the first valid index to start processing
         start_idx = 0
@@ -119,7 +120,7 @@ class DfRequestConstructor():
             for idx in batch_indices:
                 i=i+1
                 if not process_row(idx):
-                    return self.df_processor.processed_df  # Stop processing if StopProcessingError occurs
+                    return self.df  # Stop processing if StopProcessingError occurs
                 
                 if progress_bar:
                     progress_percent = int(i / batch_size * 100)
@@ -128,15 +129,15 @@ class DfRequestConstructor():
                 # Update progress bar after each row
                 processed_count += 1
                 if processed_count % save_interval == 0:
-                    self.app_logger.log_excel(self.df_processor.processed_df, version="processing")  # Save periodically
+                    self.app_logger.log_excel(self.df, version="processing")  # Save periodically
 
                 # Check if we have processed the specified batch size
                 if batch_size > 0 and processed_count >= batch_size:
                     st.toast(f'Processed {processed_count} rows. Ready to process a new batch.')
-                    self.app_logger.log_excel(self.df_processor.processed_df, version="processing")
+                    self.app_logger.log_excel(self.df, version="processing")
                     if progress_bar:
                         my_bar.empty()
-                    return self.df_processor.processed_df
+                    return self.df
             
             start_idx += len(batch_indices)
             if progress_bar:
@@ -145,12 +146,12 @@ class DfRequestConstructor():
                 break  # Break if the batch was smaller than batch_size
 
         # Final save after processing
-        self.app_logger.log_excel(self.df_processor.processed_df, version="processing")
+        self.app_logger.log_excel(self.df, version="processing")
         
         if start_idx >= len(valid_indices):
             st.success('Processing complete! All rows have been processed.')
 
-        return self.df_processor.processed_df
+        return self.df
 
 
     def _base_batch_streamlit(self,function,function_ready=True, query_name="query_name", response_name="response_name", function_name="function_name", config_package=None,**kwargs):
@@ -166,8 +167,11 @@ class DfRequestConstructor():
 
         else:
             default_value='Select a column...'
+            
+            self._column_refresh()
+
             query_column = st.selectbox(f"Select columns use as {query_name}", 
-                                        options=[default_value] + self.df_processor.processed_df.columns.tolist(), help="This is the input colum. Each row will be processed through the function")
+                                        options=[default_value] + self.available_columns, help="This is the input colum. Each row will be processed through the function")
             batch_size = st.number_input(f"{function_name} requests batch size",min_value=0,max_value=200,step=1,value=5, help="Here you set how many rows to process with a click. Set 0 to run the whole file")
             response_column = st.text_input(f"{response_name} Column Name",response_name, help="The response from the function will be stored in a column with the name you provide here")
             if query_column == response_column:
@@ -218,7 +222,8 @@ class DfRequestConstructor():
                 response_name="LLM Response",
                 function_name="LLM",
                 sys_msg=sys_msg)
-        return self.df_processor
+            
+        return self.df 
 
 
     def llm_embed_single_column(self, llm_manager, config_package=None):
@@ -233,50 +238,29 @@ class DfRequestConstructor():
                                     response_name="Embeddings",
                                     function_name="LLM",
                                     force_string=False)
-        return self.df_processor.processed_df
+        return self.df
 
 
-    def google_request_single_column(self, serpapi_manager, oxylabs_manager, config_package=None):
+    def serpapi_request_single_column(self, serpapi_manager, config_package=None):
         if config_package:
             self._base_batch_streamlit(function=serpapi_manager.extract_organic_results, config_package=config_package, force_string=False)
         else:
-            st.write("### Batch Requests to Crawl Google")
-            st.write("Here you can take a column and search each item on Google")
+            st.write("### Batch Requests to SerpAPI")
+            st.write("Here you can take a column and search each item on SerpAPI")
 
-            crawler_type = st.selectbox("Select the crawler", options=["Oxylabs", "SerpAPI"], help="Select the crawler you want to use")
+            country=st.selectbox("country",['it','us','uk','fr','de','es']) 
+            num_results = st.number_input("Number of results per query",min_value=1,max_value=10,step=1,value=3, help="The number of search results to save in the response")
 
-            if crawler_type == "SerpAPI":
-                country=st.selectbox("country",['it','us','uk','fr','de','es']) 
-                num_results = st.number_input("Number of results per query",min_value=1,max_value=10,step=1,value=3, help="The number of search results to save in the response")
+            lastyears = st.number_input("N of Past Years",min_value=0,max_value=10,step=1,value=0, help="Limit results to certain past years. Set to 0 for no limit")
 
-                last_years = st.number_input("N of Past Years",min_value=0,max_value=10,step=1,value=0, help="Limit results to certain past years. Set to 0 for no limit")
-
-                self._base_batch_streamlit(function=serpapi_manager.extract_organic_results, 
-                                        query_name="Content to search", 
-                                        response_name="Google Results",
-                                        function_name="Google Search",
-                                        num_results=num_results,
-                                        country=country,
-                                        last_years=last_years,)
-                
-            if crawler_type == "Oxylabs":
-
-                domain=st.selectbox("country",['it','us','uk','fr','de','es']) 
-                num_results = st.number_input("Number of results per query",min_value=1,max_value=1000,step=1,value=3, help="The number of search results to save in the response")
-
-                last_years = st.number_input("N of Past Years",min_value=0,max_value=10,step=1,value=0, help="Limit results to certain past years. Set to 0 for no limit")
-
-                self._base_batch_streamlit(function=oxylabs_manager.serp_paginator, 
-                                        query_name="Content to search", 
-                                        response_name="Google Results",
-                                        function_name="Google Search",
-                                        num_results=num_results,
-                                        domain=domain,
-                                        last_years=last_years,
-                                        status_bar=True,)
-
-
-        return self.df_processor
+            self._base_batch_streamlit(function=serpapi_manager.extract_organic_results, 
+                                    query_name="Content to search", 
+                                    response_name="SerpAPI Response",
+                                    function_name="SerpAPI",
+                                    num_results=num_results,
+                                    country=country,
+                                    lastyears=lastyears)
+        return self.df
 
 
     def crawler_request_single_column(self, web_scraper,oxylabs_manager, config_package=None):
@@ -288,7 +272,7 @@ class DfRequestConstructor():
             crawler_type = st.selectbox("Select the crawler", options=["Oxylabs", "Generic"], help="Select the crawler you want to use")
 
             if crawler_type == "Oxylabs":
-                self._base_batch_streamlit(function=oxylabs_manager.web_crawler, 
+                self._base_batch_streamlit(function=oxylabs_manager.generic_crawler, 
                                         query_name="Link to crawl", 
                                         response_name="Crawled content",
                                         function_name="Crawl",)
@@ -298,7 +282,7 @@ class DfRequestConstructor():
                                         query_name="Link to crawl", 
                                         response_name="Crawled content",
                                         function_name="Crawl",)
-        return self.df_processor
+        return self.df
 
 
     def oxylabs_request_single_column(self, oxylabs_manager, config_package=None):
@@ -314,7 +298,7 @@ class DfRequestConstructor():
 
             function = st.selectbox("Info to extract",['Product Info','Reviews'])
             if function == 'Product Info':
-                self._base_batch_streamlit(function=oxylabs_manager.get_amazon_product_info, 
+                self._base_batch_streamlit(function=oxylabs_manager.extract_amazon_product_info, 
                                         query_name="ASIN to retrieve", 
                                         response_name="Amazon info",
                                         function_name="Amazon search",
@@ -323,115 +307,62 @@ class DfRequestConstructor():
             elif function == 'Reviews':
                 review_pages = st.number_input("Review Pages per product",min_value=1,max_value=5,step=1,value=1, help="The number of search results to save in the response")
                 
-                self._base_batch_streamlit(function=oxylabs_manager.get_amazon_review, 
+                self._base_batch_streamlit(function=oxylabs_manager.extract_amazon_reviews, 
                                         query_name="ASIN to retrieve", 
                                         response_name="Amazon info",
                                         function_name="Amazon search",
                                         amazon_domain=amazon_domain,
                                         review_pages=review_pages)
-        return self.df_processor
 
-
+                    
+            
+        return self.df
     
     def df_handler(self):
-        available_columns = st.session_state['available_columns']
-        tabs = st.tabs(["Unroll", "Drop", "Merge", "Add", "Rename", "Parse"])
-        #column unroller
-        with tabs[0]:
-            st.write ("### Column Unroller")
-            st.write("If you have structured in a column cells you can unroll it with this function. It will generate new lines for lists, new columns for dictionaries. Works for SerpAPI results, LLM structured response...")
-            expander_msg_column = st.selectbox("Select column to expand", 
-                                            options=available_columns,
-                                            help="The column where you have structured content that needs to be unrolled")
-            if st.button("expand column objects"):
-                self.app_logger.log_excel(self.df_processor.processed_df,version="before_unrolling")
-                self.df_processor.unroll_json(expander_msg_column)
-                self.df_processor.update_columns_list()
-
 
         #column drop
-        with tabs[1]:
+        with st.expander("Drop Columns"):
             st.write ("### Column Dropper")
-            columns_to_drop = st.multiselect("Columns to drop",available_columns)
+            columns_to_drop = st.multiselect("Columns to drop",self.available_columns)
             st.write (f"You do know that by pressing this you will erase the columns {columns_to_drop} forever, right?")
             if st.button("Yes, Drop Them!", type="primary"):
-                self.df_processor.processed_df=self.df_processor.processed_df.drop(columns=columns_to_drop, errors='ignore')
-                self.df_processor.update_columns_list()
+                self.df=self.df.drop(columns=columns_to_drop, errors='ignore')
 
         #column merge
-        with tabs[2]:
+        with st.expander("Merge Columns"):
             st.write ("### Column Merger")
-            columns_to_merge = st.multiselect("Columns to merge",available_columns)
+            columns_to_merge = st.multiselect("Columns to merge",self.available_columns)
             separator = st.text_input("Separator")
             new_column_name = st.text_input("New Column Name")
             if st.button("Merge columns!", type="primary"):
-                self.df_processor.processed_df[new_column_name] = self.df_processor.processed_df[columns_to_merge].apply(
+                self.df[new_column_name] = self.df[columns_to_merge].apply(
                     lambda x: separator.join(x.astype(str)), axis=1
                 )
-                self.df_processor.update_columns_list()
 
 
         #column add
-        with tabs[3]:
+        with st.expander("Add Columns"):
             st.write ("### Column Adder")
             new_column_content = st.text_input("New Column Content")
             new_column_name = st.text_input("New Column_Name")
             if st.button("Generate new column!", type="primary"):
-                self.df_processor.processed_df[new_column_name] = new_column_content
-                self.df_processor.update_columns_list()
+                self.df[new_column_name] = new_column_content
 
 
         #column rename
-        with tabs[4]:
+        with st.expander("Rename Columns"):
             st.write("### Column Renamer")
-            column_to_rename = st.selectbox("Select column to rename", available_columns)
+            column_to_rename = st.selectbox("Select column to rename", self.available_columns)
             new_column_name = st.text_input("New name for the selected column")
             if st.button("Rename column!", type="primary"):
                 if column_to_rename and new_column_name:
-                    self.df_processor.processed_df = self.df_processor.processed_df.rename(columns={column_to_rename: new_column_name})
+                    self.df = self.df.rename(columns={column_to_rename: new_column_name})
                     st.success(f"Column '{column_to_rename}' has been renamed to '{new_column_name}'")
-                    self.df_processor.update_columns_list()
                 else:
                     st.warning("Please select a column and provide a new name")
 
-        #Column parser
-        with tabs[5]:
-            st.write("### Column Parser")
-            column_to_parse = st.selectbox("Select column to parse", available_columns)
-            expected_type = st.selectbox("Select expected data type", 
-                                         ["Numeric", "DateTime", "JSON", "List", "String/Other"])
-            if st.button("Parse Column", type="primary"):
-                original_type = self.df_processor.get_data_type(column_to_parse)
-                self.df_processor.parse_column(column_to_parse, expected_type)
-                new_type = self.df_processor.get_data_type(column_to_parse)
-                self.df_processor.update_columns_list()
-                
-                if original_type != new_type:
-                    st.success(f"Column '{column_to_parse}' has been parsed from {original_type} to {new_type}")
-                    
-                else:
-                    st.info(f"No change in data type. Column '{column_to_parse}' remains as {new_type}")
-                
-                
-        with st.expander("Table Recap", expanded=True):
-            df = self.df_processor.processed_df
-            total_rows, total_cols = df.shape
-            memory_usage = df.memory_usage(deep=True).sum() / (1024 * 1024)  # in MB
-            
-            try:
-                duplicated_rows = df.duplicated().sum()
-            except:
-                duplicated_rows = "cannot compute"
 
-            st.write(f"**Shape:** {total_rows} rows - {total_cols} columns | **Memory Usage:** {memory_usage:.2f} MB | **Total Null Values:** {df.isnull().sum().sum()} | **Duplicate Rows:** {duplicated_rows}")
-            
-            st.write("**Column Summary:**")
-            column_summary = self.df_processor.generate_column_summary(df)
-            st.dataframe(column_summary, use_container_width=True)
-        
-        self.df_processor.update_columns_list()
-        return self.df_processor
-
+        return self.df
 
     
 class SingleRequestConstructor():
