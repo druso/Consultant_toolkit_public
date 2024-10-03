@@ -14,47 +14,21 @@ from typing import Tuple, Any, Optional, List
 
 class DataFrameProcessor:
     def __init__(self, df: pd.DataFrame):
-        self.user_df = df.copy()
-        if 'processed_df' not in st.session_state:
-            st.session_state['processed_df'] = df.copy()
-        
-        self.processed_df = st.session_state['processed_df']
-        if 'available_columns' not in st.session_state:
-            st.session_state['available_columns'] = self.processed_df.columns.tolist()
-        
-        if st.sidebar.button("Refresh columns list", use_container_width=True, help="Will force the refresh of the lists of available columns throughout the application"):
-            self.update_columns_list()
-
-        if st.sidebar.button('Restore Processing', use_container_width=True, help="Will restore the file to the originally uploaded file"):
-            st.session_state["app_logger"].reinitialize_session_id()
-            st.session_state["app_logger"].log_excel(self.user_df,"original")
-            self.reset_to_original()
-
-    def update_columns_list(self):
-        st.session_state['available_columns'] = self.processed_df.columns.tolist()
-        
+        self.df = df
 
     def unroll_json(self, column_name: str) -> pd.DataFrame:
         """
         Unrolls (flattens) JSON data within a specified column of the DataFrame.
         """
-        import ast
-
         # Helper function to safely load JSON
         def safe_json_loads(val):
-            if isinstance(val, str):
-                try:
-                    return ast.literal_eval(val)
-                except (ValueError, SyntaxError):
-                    return val  # Return the original value if parsing fails
-            else:
-                return val
+            try:
+                return json.loads(val) if isinstance(val, str) else val
+            except json.JSONDecodeError:
+                return None  # Handle invalid JSON by returning None
 
-        # Make a copy of the original column to preserve the original data
-        self.processed_df[column_name + '_original'] = self.processed_df[column_name]
-
-        # Apply the safe JSON loading to the specified column
-        self.processed_df[column_name] = self.processed_df[column_name].apply(safe_json_loads)
+        # Vectorized JSON loading for the specified column
+        self.df[column_name] = self.df[column_name].apply(safe_json_loads)
 
         # Helper function to explode and normalize data
         def explode_and_normalize(data):
@@ -66,17 +40,15 @@ class DataFrameProcessor:
                 return None
 
         result_rows = []
-        for index, row in self.processed_df.iterrows():
+        for index, row in self.df.iterrows():
             json_data = row[column_name]
 
             # Check if any value within the JSON data is a list or dict
             expanded_data = explode_and_normalize(json_data)
             if expanded_data is not None:
                 for _, expanded_row in expanded_data.iterrows():
-                    new_row = row.to_dict()  # Keep all original columns
-                    # Optionally add a prefix to expanded columns to avoid conflicts
-                    # expanded_row = expanded_row.add_prefix('expanded_')
-                    new_row.update(expanded_row.to_dict())  # Update the row with exploded data
+                    new_row = row.drop(column_name).to_dict()  # Drop the original JSON column
+                    new_row.update(expanded_row)  # Update the row with exploded data
                     result_rows.append(new_row)
             else:
                 # Straight values are left as-is
@@ -89,41 +61,42 @@ class DataFrameProcessor:
             if any(isinstance(i, list) for i in result_df[col]):
                 result_df[col] = result_df[col].apply(lambda x: x if isinstance(x, list) else [x])
 
-        self.processed_df = result_df
-        return self.processed_df
+        self.df = result_df
+        return self.df
 
     def try_parse_column(self, column_name: str) -> pd.Series:
         """
         Attempts to parse a column into different data types.
         """
-        series = self.processed_df[column_name]
-
-        # Try parsing as JSON first
+        series = self.df[column_name]
+        
+        # Try parsing as numeric
+        if series.dtype == 'object':
+            try:
+                return pd.to_numeric(series)
+            except ValueError:
+                pass
+        
+        # Try parsing as datetime
+        try:
+            return pd.to_datetime(series)
+        except ValueError:
+            pass
+        
+        # Try parsing as JSON
         if series.dtype == 'object':
             try:
                 return series.apply(json.loads)
-            except (ValueError, json.JSONDecodeError):
+            except ValueError:
                 pass
-
-        # Try parsing as datetime
-        try:
-            return pd.to_datetime(series, errors='coerce')
-        except (ValueError, TypeError):
-            pass
-
-        # Try parsing as numeric
-        try:
-            return pd.to_numeric(series, errors='coerce')
-        except ValueError:
-            pass
-
+        
         # Try parsing as list (assuming string representation of lists)
         if series.dtype == 'object':
             try:
                 return series.apply(eval)
             except:
                 pass
-
+        
         # If all parsing attempts fail, return the original series
         return series
 
@@ -131,122 +104,68 @@ class DataFrameProcessor:
         """
         Returns the data type of a column as a string.
         """
-        series = self.processed_df[column_name]
-        if pd.api.types.is_datetime64_any_dtype(series):
-            return f"DateTime ({series.dtype})"
-        elif pd.api.types.is_numeric_dtype(series):
-            return f"Numeric ({series.dtype})"
+        series = self.df[column_name]
+        if pd.api.types.is_numeric_dtype(series):
+            return "Numeric"
+        elif pd.api.types.is_datetime64_any_dtype(series):
+            return "DateTime"
         elif series.dtype == 'object':
-            if series.apply(lambda x: isinstance(x, dict)).any():
-                return "JSON"
-            elif series.apply(lambda x: isinstance(x, list)).any():
-                return "List"
-        return f"String/Other ({series.dtype})"
+            if series.apply(lambda x: isinstance(x, (list, dict))).all():
+                return "JSON/List"
+        return "String/Other"
 
-    def parse_column(self, column_name: str, expected_type: str) -> None:
+    def parse_column(self, column_name: str) -> None:
         """
-        Parses a column based on the expected type and updates the DataFrame.
-        The original column is backed up as 'column_name_backup'.
+        Parses a column and updates the DataFrame if the data type changes.
         """
         original_type = self.get_data_type(column_name)
-        series = self.processed_df[column_name]
-
-        # Back up the original column if not already backed up
-        backup_column_name = column_name + '_backup'
-        if backup_column_name not in self.processed_df.columns:
-            self.processed_df[backup_column_name] = series.copy()
-
-        if expected_type == "Numeric":
-            parsed_series = pd.to_numeric(series, errors='coerce')
-        elif expected_type == "DateTime":
-            parsed_series = pd.to_datetime(series, errors='coerce')
-        elif expected_type == "JSON":
-            def safe_json_loads(val):
-                try:
-                    return json.loads(val) if isinstance(val, str) else val
-                except json.JSONDecodeError:
-                    return None  # Handle invalid JSON by returning None
-            parsed_series = series.apply(safe_json_loads)
-        elif expected_type == "List":
-            def safe_eval(val):
-                try:
-                    return eval(val) if isinstance(val, str) else val
-                except:
-                    return None  # Handle invalid eval by returning None
-            parsed_series = series.apply(safe_eval)
-        else:
-            parsed_series = series  # Keep as is for "String/Other"
-
-        # Update the column with parsed data
-        self.processed_df[column_name] = parsed_series
-
+        parsed_series = self.try_parse_column(column_name)
         new_type = self.get_data_type(column_name)
-
+        
         if original_type != new_type:
+            self.df[column_name] = parsed_series
             print(f"Column '{column_name}' has been parsed from {original_type} to {new_type}")
         else:
-            print(f"No change in data type. Column '{column_name}' remains as {new_type}")
+            print(f"No change in data type. Column '{column_name}' remains as {original_type}")
 
-
-    def generate_column_summary(self, df):
-        summary = []
-        for col in df.columns:
-            col_type = df[col].dtype
-            null_count = df[col].isnull().sum()
-            null_percentage = (null_count / len(df)) * 100
-            
-            try:
-                unique_count = df[col].nunique()
-            except:
-                unique_count = "N/A (unhashable type)"
-            
-            sample_value = df[col].iloc[0] if not df[col].empty else None
-            sample_type = type(sample_value).__name__
-            
-            if pd.api.types.is_numeric_dtype(df[col]):
-                summary_dict = {
-                    'Column': col,
-                    'Type': f"{col_type} ({sample_type})",
-                    'Unique Values': unique_count,
-                    'Null Count': null_count,
-                    'Null %': f"{null_percentage:.2f}%",
-                    'Min': df[col].min(),
-                    'Max': df[col].max(),
-                    'Mean': df[col].mean(),
-                    'Median': df[col].median()
-                }
-            elif pd.api.types.is_datetime64_any_dtype(df[col]):
-                summary_dict = {
-                    'Column': col,
-                    'Type': f"{col_type} ({sample_type})",
-                    'Unique Values': unique_count,
-                    'Null Count': null_count,
-                    'Null %': f"{null_percentage:.2f}%",
-                    'Min Date': df[col].min(),
-                    'Max Date': df[col].max()
-                }
-            else:
-                summary_dict = {
-                    'Column': col,
-                    'Type': f"{col_type} ({sample_type})",
-                    'Unique Values': unique_count,
-                    'Null Count': null_count,
-                    'Null %': f"{null_percentage:.2f}%",
-                    'Sample Value': str(sample_value)[:50] + ('...' if len(str(sample_value)) > 50 else '')
-                }
-            
-            summary.append(summary_dict)
-        
-        return pd.DataFrame(summary)
-
-
-    def reset_to_original(self):
+    def drop_columns(self, columns_to_drop: list) -> None:
         """
-        Resets the processed DataFrame to the original state.
+        Drops specified columns from the DataFrame.
         """
-        self.processed_df = self.user_df.copy()
+        self.df = self.df.drop(columns=columns_to_drop, errors='ignore')
 
-    
+    def merge_columns(self, columns_to_merge: list, new_column_name: str, separator: str = " ") -> None:
+        """
+        Merges specified columns into a new column.
+        """
+        self.df[new_column_name] = self.df[columns_to_merge].apply(
+            lambda x: separator.join(x.astype(str)), axis=1
+        )
+
+    def add_column(self, new_column_name: str, new_column_content) -> None:
+        """
+        Adds a new column with specified content.
+        """
+        self.df[new_column_name] = new_column_content
+
+    def rename_column(self, old_name: str, new_name: str) -> None:
+        """
+        Renames a column.
+        """
+        self.df = self.df.rename(columns={old_name: new_name})
+
+    def get_available_columns(self) -> list:
+        """
+        Returns a list of available column names.
+        """
+        return list(self.df.columns)
+
+    def get_dataframe(self) -> pd.DataFrame:
+        """
+        Returns the current state of the DataFrame.
+        """
+        return self.df
+
 
 class DataLoader:
     """
@@ -334,6 +253,8 @@ class DataLoader:
 
 
 
+
+
 class AppLogger() :
     """
     Handles most of I/O operations for storing the activities
@@ -350,9 +271,6 @@ class AppLogger() :
             folder = os.path.join(self.logs_folder, log_type)
             os.makedirs(folder, exist_ok=True)
             setattr(self, f"{log_type}_folder", folder)
-
-    def reinitialize_session_id(self):
-        self.session_id = datetime.now().strftime('%y%m%d') +"_"+ str(uuid.uuid4())[:6]
 
     def set_file_name(self, file_name: str):
         self.file_name = file_name 
@@ -401,7 +319,6 @@ class AppLogger() :
         path=f"{folder}/{version}_{self.file_name.split('.', 1)[0]}.xlsx"
         with open(path, "wb") as f:
             f.write(self.to_excel(df))
-        print (f"saved excel log at {path}")
         if return_path:
             return path
 
@@ -431,7 +348,6 @@ class AppLogger() :
             # Attempt to save as JSON
             with open(f"{folder}/{cleaned_filename}.json", "w") as f:
                 json.dump(response, f, indent=4)
-            print (f"saved json log at {folder}/{cleaned_filename}.json")
         except TypeError:
             # If JSON serialization fails, save as text
             with open(f"{folder}/{cleaned_filename}.txt", "w") as f:
