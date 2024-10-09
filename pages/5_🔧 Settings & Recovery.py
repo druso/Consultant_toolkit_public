@@ -55,8 +55,6 @@ if st.session_state["authentication_status"]:
     st.divider()
 
 
-
-
     st.title("Session Recovery")#########################################################################################
 
     st.write("""Something broke along the way? 
@@ -66,7 +64,7 @@ if st.session_state["authentication_status"]:
             Select your session_id and download the processed files or requests logs. May be able to recover something""")
 
     # List all subfolders in the main directory
-    logs_folder = st.selectbox('Select the type of log', [app_logger.files_folder, app_logger.requests_folder])
+    logs_folder = st.selectbox('Select the type of log', [app_logger.files_folder, app_logger.requests_folder, app_logger.openai_threads_folder])
 
     available_logs = []
     selected_logs_folder = None
