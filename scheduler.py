@@ -6,7 +6,7 @@ def run_scheduler():
     
     while True:
         print(f"{datetime.now()} - Cronjob: I'm alive")
-        time.sleep(10)
+        time.sleep(3600)
 
 if __name__ == "__main__":
     run_scheduler()
