@@ -66,24 +66,37 @@ if st.session_state["authentication_status"]:
             Select your session_id and download the processed files or requests logs. May be able to recover something""")
 
     # List all subfolders in the main directory
-    
-    logs_folder = st.selectbox('Select the type of log', [app_logger.files_folder,app_logger.requests_folder])
+    logs_folder = st.selectbox('Select the type of log', [app_logger.files_folder, app_logger.requests_folder])
+
+    available_logs = []
+    selected_logs_folder = None
 
     if logs_folder:
         available_logs = app_logger.list_subfolders(logs_folder)
-        selected_logs_folder = st.selectbox('Select a folder', available_logs)
+        selected_logs_folder = st.selectbox('Select a folder', [''] + available_logs)
 
-        if selected_logs_folder:
-            if st.button('Prepare the ZIP', use_container_width=True,):
-                zip_file = app_logger.zip_directory(logs_folder+"/"+selected_logs_folder)
-                st.download_button(
-                    label="Download",
-                    data=zip_file,
-                    file_name=f"{selected_logs_folder}.zip",
-                    mime="application/zip",
-                    use_container_width=True, 
-                    type='primary'
-                )
+    # Create the "Prepare the ZIP" button, disabled if no folder is selected
+    if st.button('Prepare the ZIP', type='primary', use_container_width=True, disabled=not selected_logs_folder):
+        zip_file = app_logger.zip_directory(os.path.join(logs_folder, selected_logs_folder))
+        st.download_button(
+            label="Download",
+            data=zip_file,
+            file_name=f"{selected_logs_folder}.zip",
+            mime="application/zip",
+            use_container_width=True, 
+            type='primary'
+        )
+    
+    st.divider()
+    purge_logs_password = st.session_state['tool_config'].get('purge_logs_password')
+    password = st.text_input('Provide the password to purge the logs folder', type='password') if purge_logs_password else None
+
+    if st.button('Purge the logs folder', use_container_width=True):
+        if not purge_logs_password or password == purge_logs_password:
+            app_logger.purge_logs_folder()
+            st.success('Logs folder purged')
+        elif purge_logs_password:
+            st.error('Input the right password, or ask the webmaster')
 
 elif st.session_state["authentication_status"] is False:
     st.error('Username/password is incorrect')
