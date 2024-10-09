@@ -8,6 +8,7 @@ from datetime import datetime
 import uuid
 import zipfile
 from typing import Tuple, Any, Optional, List
+import shutil
 
 
 
@@ -259,7 +260,6 @@ class AppLogger() :
         self.file_name = "default"
         logs_root_folder = os.getenv('LOGS_ROOT_FOLDER') or st.session_state.get('tool_config', {}).get('logs_root_folder') or "logs"
         self.logs_folder = f"{logs_root_folder}/{user_id}"
-        print (self.logs_folder)
         self.log_types = ["files", "requests", "openai_threads"]
         
         for log_type in self.log_types:
@@ -314,6 +314,11 @@ class AppLogger() :
                     zipf.write(file_path, os.path.relpath(file_path, folder_path))
         byte_io.seek(0)
         return byte_io
+    
+    def purge_logs_folder(self):
+        folder = self.logs_folder
+        shutil.rmtree(folder, ignore_errors=True)
+        os.makedirs(folder, exist_ok=True)
 
     def to_excel(self, df: pd.DataFrame) -> bytes:
  
