@@ -1,12 +1,25 @@
-# If True will require login to use the toolkit, credentials are set in user_config.yaml
+## If True will require login to use the toolkit, credentials are set in user_config.yaml
 require_login: False
+## set the folders where all logs will be saved
+## if none is provided will default to logs, can also be provided as an env variable LOGS_ROOT_FOLDER
+logs_root_folder: logs
+
+## Assistants base config 
+assistant_configs:
+  assistant_name: 'Generic Data Analyst'
+  tools:
+    - type: "code_interpreter"
+  model: "gpt-4o"
+  temperature: 0.1
 
 
-# Set to true to use the service.
-# for each service provide a key name that will be assigned to the credentials of the servcie (API Keys..)
-# this key will be searched as env variable, if not found will be required to the user
 
-#LLMs
+# Services
+## Set to true to use the service.
+## for each service provide a key name that will be assigned to the credentials of the servcie (API Keys..)
+## this key will be searched as env variable, if not found will be required to the user
+
+## LLMs
 groq:
   use: True
   key: GROQ_API_KEY
@@ -27,7 +40,7 @@ openai:
   max_token: 3000
 
 
-#3rd Parties
+## 3rd Parties
 serp_api:
   use: True
   key: SERP_API_KEY
@@ -37,12 +50,3 @@ oxylab:
   key: 
     - OXYLABS_USER
     - OXYLABS_PSW
-
-#Assistants setup
-assistant_configs:
-  assistant_name: 'Generic Data Analyst'
-  tools:
-    - type: "code_interpreter"
-  model: "gpt-4o"
-  temperature: 0.1
-

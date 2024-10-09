@@ -6,9 +6,10 @@ import streamlit as st
 import pandas as pd
 
 
-
 page_config = {'page_title':"Doc Assistant",
           'page_icon':"📋",}
+page_setup(page_config)
+
 
 if 'chunks_df' not in st.session_state:
     st.session_state['chunks_df'] = pd.DataFrame()
@@ -17,22 +18,22 @@ if 'doc_status' not in st.session_state:
     st.session_state['doc_status'] = {'not_chunked':True,'not_studied':True }
 
 
-page_setup(page_config)
 
 if st.session_state["authentication_status"]:
+    app_logger = st.session_state["app_logger"]
+    data_loader = DataLoader("doc", app_logger)
 
-    user_doc, file_name = DataLoader("doc").load_user_file()
 
-    if user_doc:
-        llm_manager = LlmManager("streamlit",st.session_state["app_logger"])
+    if data_loader.user_file:
+        user_doc = data_loader.user_file
+        llm_manager = LlmManager("streamlit",app_logger)
         st.write("1. First thing we need to chunk the text into more digestible bits")
-        st.session_state['chunks_df'] = SingleRequestConstructor().text_chunker(user_doc, file_name,st.session_state['chunks_df'],)
+        st.session_state['chunks_df'] = SingleRequestConstructor().text_chunker(user_doc, app_logger.file_name,st.session_state['chunks_df'],)
         if not st.session_state['chunks_df'].empty:   
-            st.session_state["app_logger"].set_file_name(file_name)
-            st.session_state["app_logger"].log_excel(st.session_state['chunks_df']) 
+            app_logger.log_excel(st.session_state['chunks_df']) 
             st.session_state['doc_status']['not_chunked']=False 
         
-        request_constructor=DfRequestConstructor(st.session_state['chunks_df'], st.session_state["app_logger"])
+        request_constructor=DfRequestConstructor(st.session_state['chunks_df'], app_logger)
 
         st.divider()
         st.write("2. Then the LLM can 'study' the contents. " + (
@@ -44,7 +45,7 @@ if st.session_state["authentication_status"]:
 
         if st.button("Study the content", disabled=st.session_state['doc_status']['not_chunked'], use_container_width=True):  
             st.session_state['chunks_df'] = request_constructor.llm_embed_single_column(llm_manager,config_package={"query_column":"chunk", "response_column":"embedding"})
-            st.session_state["app_logger"].log_excel(st.session_state['chunks_df'])
+            app_logger.log_excel(st.session_state['chunks_df'])
             st.session_state['doc_status']['not_studied']=False
         
         st.divider()

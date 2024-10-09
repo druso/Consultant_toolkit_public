@@ -11,17 +11,13 @@ page_setup(page_config)
 
 
 if st.session_state["authentication_status"]:
+    app_logger = st.session_state["app_logger"]
 
-    user_df, file_name = DataLoader("dataframe").load_user_file()
+    data_loader = DataLoader("dataframe", app_logger)
 
-
-    if not user_df.empty:
-
+    if isinstance(data_loader.user_file, pd.DataFrame) and not data_loader.user_file.empty:
+        user_df= data_loader.user_file
         df_processor = DataFrameProcessor(user_df)
-        app_logger = st.session_state["app_logger"]
-
-        app_logger.set_file_name(file_name)
-        app_logger.log_excel(user_df,"original") #I need to save the original file only once...
 
         st.sidebar.divider()  
             
@@ -51,21 +47,26 @@ if st.session_state["authentication_status"]:
         st.divider()
         # Show a preview of the processed file
         st.write("## Preview of your processed file")
-        st.dataframe(df_processor.processed_df, use_container_width=True, hide_index=True,)
+        st.dataframe(df_processor.processed_df.head(200), use_container_width=True, hide_index=True,)
 
         st.session_state['processed_df'] = df_processor.processed_df
         #st.session_state['available_columns'] = st.session_state['processed_df'].columns.tolist()
 
-        df_excel = st.session_state["app_logger"].to_excel(df_processor.processed_df)
-        st.download_button(
-            label="Download Excel file",
-            data=df_excel,
-            file_name="processed_data.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-            type="primary",
-            key="download_button_footer"
-        )
+        def get_excel():
+            return st.session_state["app_logger"].to_excel(df_processor.processed_df)
+
+        if st.button("prepare file to download",use_container_width=True):
+            excel_file = st.session_state["app_logger"].to_excel(df_processor.processed_df)
+
+            st.download_button(
+                label="Download Excel file",
+                data=excel_file,
+                file_name="processed_data.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                type="primary",
+                key="download_button_footer"
+            )
 
 elif st.session_state["authentication_status"] is False:
     st.error('Username/password is incorrect')

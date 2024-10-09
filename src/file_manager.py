@@ -248,91 +248,6 @@ class DataFrameProcessor:
 
     
 
-class DataLoader:
-    """
-    Handles the loading of file into the application
-    """
-    def __init__(self, config_key: str):
-
-        self.configurations = {
-            "dataframe": {'extensions': ['csv', 'xls', 'xlsx'], 
-                          'handler': self._dataframe_handler, 
-                          'default':pd.DataFrame()},
-            "doc": {'extensions': ['pdf', 'docx', 'txt'], 
-                     'handler': self._doc_handler, 
-                     'default': "",
-                     'accept_multiple_file':True},
-            "audio": {'extensions': ['mp3','mp4,mpeg','mpga','m4a','wav','webm'], 
-                     'handler': None, 
-                     'default':""}
-        }
-        if config_key not in self.configurations:
-            raise ValueError("Invalid configuration key.")
-        self.file_types = self.configurations[config_key]['extensions']
-        self.handler = self.configurations[config_key]['handler']
-        self.default = self.configurations[config_key]['default']
-        self.accept_multiple_files =  self.configurations[config_key].get('accept_multiple_file', False)
-        self.uploaded_file = st.sidebar.file_uploader("Choose a file", type=self.file_types, accept_multiple_files=self.accept_multiple_files)
-        if not self.uploaded_file:
-            st.write ("## Upload a file using the widget in the sidebar to start")
-            #self.uploaded_file = st.file_uploader("Choose a file", type=self.file_types, accept_multiple_files=self.accept_multiple_files, key="Main Loader")
-            
-    def _dataframe_handler(self, uploaded_file) -> pd.DataFrame:
-        try:
-            if uploaded_file.name.endswith('.csv'):
-                # Load CSV file
-                return pd.read_csv(uploaded_file)
-            elif uploaded_file.name.endswith(('.xls', '.xlsx')):
-                # Load Excel file with additional options for better datatype handling
-                return pd.read_excel(uploaded_file, engine='openpyxl', 
-                                     dtype=str)         # Load everything as strings initially
-        except Exception as e:
-            st.sidebar.error(f"Failed to load data: {e}")
-            return self.default
-        
-    def _doc_handler(self, uploaded_files) -> str:
-
-        concatenated_text = ""
-        for uploaded_file in uploaded_files:
-            print (uploaded_file)
-            print ("I'mhere")
-            try:
-                # Check the file extension to determine handling method
-                if uploaded_file.name.endswith('.txt'):
-                    # If it's a text file, read directly
-                    text = uploaded_file.read().decode('utf-8')
-                else:
-                    # For other types, use textract
-                    temp_file_path = '/tmp/' + uploaded_file.name
-                    with open(temp_file_path, "wb") as f:
-                        f.write(uploaded_file.getbuffer())
-
-                    # Extract text from the saved file using textract
-                    text = textract.process(temp_file_path).decode('utf-8')
-                
-                concatenated_text += text
-            except Exception as e:
-                st.sidebar.error(f"Failed to load document {uploaded_file.name}: {e}")
-                concatenated_text += self.default
-        
-        return concatenated_text
-
-    def load_user_file(self) -> Tuple[Any, Optional[str]]:
-
-        if self.uploaded_file is not None:
-            if self.handler:
-                content = self.handler(self.uploaded_file)
-                if isinstance(self.uploaded_file, list):
-                    filename =  "multiple_files"
-                elif self.uploaded_file:
-                    filename = self.uploaded_file.name
-                return content, filename
-            else:
-                return self.uploaded_file, self.uploaded_file.name
-        else:
-            return self.default, None
-
-
 
 class AppLogger() :
     """
@@ -342,8 +257,9 @@ class AppLogger() :
         """Initializes the logger with a session ID and default values."""
         self.session_id = datetime.now().strftime('%y%m%d') +"_"+ str(uuid.uuid4())[:6]
         self.file_name = "default"
-        
-        self.logs_folder = f"logs/{user_id}"
+        logs_root_folder = os.getenv('LOGS_ROOT_FOLDER') or st.session_state.get('tool_config', {}).get('logs_root_folder') or "logs"
+        self.logs_folder = f"{logs_root_folder}/{user_id}"
+        print (self.logs_folder)
         self.log_types = ["files", "requests", "openai_threads"]
         
         for log_type in self.log_types:
@@ -361,6 +277,30 @@ class AppLogger() :
         folder = os.path.join(self.files_folder, self.session_id)
         os.makedirs(folder, exist_ok=True)
         return folder
+    
+    def save_original_file(self, uploaded_file):
+        folder = self.session_files_folder()
+        os.makedirs(folder, exist_ok=True)
+
+
+        def save_single_file(file, index=None):
+            if index is not None:
+                file_name = f"original_{index+1}_{file.name}"
+            else:
+                file_name = f"original_{file.name}"
+            file_path = os.path.join(folder, file_name)
+            with open(file_path, "wb") as f:
+                f.write(file.getbuffer())
+                print (f"Saved original file {file_path}")
+
+        if isinstance(uploaded_file, list):
+            for index, file in enumerate(uploaded_file):
+                save_single_file(file, index)
+            self.file_name = "multiple_files"
+        else:
+            save_single_file(uploaded_file)
+            self.file_name = uploaded_file.name
+
     
     def list_subfolders(self, folder_path: str) -> List[str]:
         return [f for f in os.listdir(folder_path) if os.path.isdir(os.path.join(folder_path, f))]
@@ -509,3 +449,86 @@ class AppLogger() :
             print(f"Thread log for thread id: {thread_id} does not exist.")
         except Exception as e:
             print(f"Error deleting thread log: {e}")
+
+
+
+
+class DataLoader:
+    """
+    Handles the loading of file into the application
+    """
+    def __init__(self, config_key: str, app_logger:AppLogger):
+
+        self.configurations = {
+            "dataframe": {'extensions': ['csv', 'xls', 'xlsx'], 
+                          'handler': self._dataframe_handler, 
+                          'default':pd.DataFrame()},
+            "doc": {'extensions': ['pdf', 'docx', 'txt'], 
+                     'handler': self._doc_handler, 
+                     'default': "",
+                     'accept_multiple_file':True},
+            "audio": {'extensions': ['mp3','mp4', 'mpeg','mpga','m4a','wav','webm'], 
+                     'handler': None, 
+                     'default':""}
+        }
+        if config_key not in self.configurations:
+            raise ValueError("Invalid configuration key.")
+        self.app_logger = app_logger
+        self.file_types = self.configurations[config_key]['extensions']
+        self.handler = self.configurations[config_key]['handler']
+        self.default = self.configurations[config_key]['default']
+        self.accept_multiple_files =  self.configurations[config_key].get('accept_multiple_file', False)
+        uploaded_file = st.sidebar.file_uploader("Choose a file", type=self.file_types, accept_multiple_files=self.accept_multiple_files)
+        if uploaded_file:
+            self.user_file = self.load_user_file(uploaded_file)
+            self.app_logger.save_original_file(uploaded_file)
+            
+        else:
+            self.user_file = None
+            self.content = self.default
+            st.write ("## Upload a file using the widget in the sidebar to start")
+            
+    def _dataframe_handler(self, uploaded_file) -> pd.DataFrame:
+        try:
+            if uploaded_file.name.endswith('.csv'):
+                # Load CSV file
+                return pd.read_csv(uploaded_file)
+            elif uploaded_file.name.endswith(('.xls', '.xlsx')):
+                # Load Excel file with additional options for better datatype handling
+                return pd.read_excel(uploaded_file, engine='openpyxl', 
+                                     dtype=str)         # Load everything as strings initially
+        except Exception as e:
+            st.sidebar.error(f"Failed to load data: {e}")
+            return self.default
+        
+    def _doc_handler(self, uploaded_files) -> str:
+
+        concatenated_text = ""
+        for uploaded_file in uploaded_files:
+            print (uploaded_file)
+            try:
+                # Check the file extension to determine handling method
+                if uploaded_file.name.endswith('.txt'):
+                    # If it's a text file, read directly
+                    text = uploaded_file.read().decode('utf-8')
+                else:
+                    # For other types, use textract
+                    temp_file_path = '/tmp/' + uploaded_file.name
+                    with open(temp_file_path, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+
+                    # Extract text from the saved file using textract
+                    text = textract.process(temp_file_path).decode('utf-8')
+                
+                concatenated_text += text
+            except Exception as e:
+                st.sidebar.error(f"Failed to load document {uploaded_file.name}: {e}")
+                concatenated_text += self.default
+        
+        return concatenated_text
+
+    def load_user_file(self, uploaded_file):
+        if self.handler:
+            return self.handler(uploaded_file)
+        else:
+            return uploaded_file
