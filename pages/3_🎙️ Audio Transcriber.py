@@ -4,28 +4,28 @@ from src.file_manager import DataLoader
 from src.request_processor import SingleRequestConstructor
 from src.external_tools import LlmManager, AudioTranscribe
 from src.setup import page_setup, page_footer
-
 import io
 from openai import OpenAI
 
 page_config = {'page_title':"Audio Transcriber",
           'page_icon':"🎙️",}
-
 page_setup(page_config)
 
 if st.session_state["authentication_status"]:
+    app_logger = st.session_state["app_logger"]
 
-    uploaded_file, file_name = DataLoader("audio").load_user_file()
-    llm_manager = LlmManager("streamlit",st.session_state["app_logger"])
-    audio_transcriber = AudioTranscribe(st.session_state["app_logger"])
-    transcript = ""
+    data_loader = DataLoader("audio", app_logger)
 
-    if uploaded_file:
+    if data_loader.user_file:
+
+        llm_manager = LlmManager("streamlit",app_logger)
+        audio_transcriber = AudioTranscribe(app_logger)
+        transcript = ""
         
         tabs= st.tabs(["Transcribe","Summarize"])
         with tabs[0]: 
             if st.button("Transcribe!", use_container_width=True, type="primary"):
-                transcript = audio_transcriber.whisper_openai_transcribe(uploaded_file)
+                transcript = audio_transcriber.whisper_openai_transcribe(data_loader.user_file)
             st.text_area("Your Transcription",transcript,placeholder="The transcription will apper here")
 
             st.download_button(
