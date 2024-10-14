@@ -1,0 +1,15 @@
+{
+    "batch_id": "batch_002",
+    "user_id": "anonymous",
+    "session_id": "241014_e99eb2",
+    "function": "llm_request",
+    "batch_size": 3,
+    "input_file": "batch_toprocess_tester2.xlsx",
+    "query_column": "parola",
+    "response_column": "LLM Response",
+    "kwargs": {
+        "sys_msg": "Sei un avanzato strumento di intelligenza artificiale a supporto di un team di consulenza digitale che segue svariate attivit\u00e0.\nLe analisi di domanda digitale utilizzano keyword per analizzarne i volumi di ricerca su piattaforme online quali google o amazon.\n\nIl tuo task \u00e9 di categorizzare un set di keywords secondo le categorie che seguono:\n# CATEGORIE\n* Nome categoria: descrizione della categoria\n* Ingredienti: keyword che includono ingredienti naturali\n* Problema: keyword relative a malattie, disturbi, sintomi o qualunque tipo di problemi\n* Farmaco: keyword relative a prodotti di natura farmacologica o terapeutica\n* Principio Attivo: keyword relative a principi attivi di natura medico-scientifica\n* Cura e Trattamento: keyword relative a trattamenti, cure, rimedi o prevenzioni\n* Altro: keyword che non rientrano nelle categorie precedenti\n\nNello scegliere la categoria per ogni keyword, considera correlazioni semantiche, termini specifici e interpretazione del contesto.\nCerca di minimizzare l'utilizzo della categoria \"Altro\".\nRispondi indicando solamente una sola delle categorie fornite.\n",
+        "llm_temp": 0.3,
+        "llm_model": "gpt-4o-mini"
+    }
+}

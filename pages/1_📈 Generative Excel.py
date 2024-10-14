@@ -29,7 +29,7 @@ if st.session_state["authentication_status"]:
         request_constructor=DfRequestConstructor(df_processor, app_logger)
         
           
-        tabs = st.tabs(["LLM", "Google", "Amazon", "Crawler", "Table Handler", "Assistant Setup"])
+        tabs = st.tabs(["LLM", "Google", "Amazon", "Crawler", "Table Handler", "Assistant Setup","Scheduler"])
         with tabs[0]:        
             df_processor = request_constructor.llm_request_single_column(llm_manager)
         with tabs[1]:
@@ -41,16 +41,16 @@ if st.session_state["authentication_status"]:
         with tabs[4]:
             df_processor = request_constructor.df_handler()
         with tabs[5]:
-            st.write("## Assistant Setup - Work in Progress")
             openai_thread_setup(openai_advance_manager).streamlit_interface(df_processor.processed_df)
+        with tabs[6]:
+            st.write("### Scheduler - Work in Progress")
 
         st.divider()
         # Show a preview of the processed file
         st.write("## Preview of your processed file")
-        st.dataframe(df_processor.processed_df.head(200), use_container_width=True, hide_index=True,)
+        st.dataframe(df_processor.processed_df.head(100), use_container_width=True, hide_index=True,)
 
-        st.session_state['processed_df'] = df_processor.processed_df
-        #st.session_state['available_columns'] = st.session_state['processed_df'].columns.tolist()
+        st.session_state['processed_df'] = df_processor.processed_df.astype(str).fillna('')
 
         def get_excel():
             return st.session_state["app_logger"].to_excel(df_processor.processed_df)

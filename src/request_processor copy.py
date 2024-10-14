@@ -2,7 +2,6 @@ from src.prompts import sysmsg_keyword_categorizer,sysmsg_review_analyst_templat
 
 from src.external_tools import LlmManager, StopProcessingError, RetryableError, SkippableError, openai_advanced_uses
 from src.file_manager import DataFrameProcessor
-from src.batch_handler import DfBatchesConstructor
 import streamlit as st
 import pandas as pd
 import tiktoken
@@ -28,16 +27,15 @@ from openai.types.beta.threads.runs.code_interpreter_tool_call import (
     CodeInterpreterOutputLogs
     )
 
-
+    
 class DfRequestConstructor():
     def __init__(self, df_processor:DataFrameProcessor, app_logger=None):
         """
-        Initialize the streamlit df request constructor
+        Initialize the request constructor, by providing it the df
         """
 
         self.df_processor = df_processor
         self.app_logger = app_logger
-        self.batches_constructor = DfBatchesConstructor(df_processor, app_logger)
 
         self.bulk_sys_templates = {
             "Custom Prompt": "",
@@ -47,11 +45,119 @@ class DfRequestConstructor():
         }
             
     
+    def _batch_requests(self, 
+                        func, 
+                        response_column, 
+                        query_column, 
+                        batch_size=0, 
+                        force_string=True, 
+                        max_retries=3, 
+                        retry_delay=1, 
+                        save_interval=10,
+                        progress_bar=True, 
+                        *args, 
+                        **kwargs):
+        """Process DataFrame rows in batches, applying a function (func) and handling errors."""
+
+        def process_row(idx):
+            """Process a single row, handling retries and errors."""
+            for attempt in range(max_retries + 1):
+                try:
+                    value = self.df_processor.processed_df.loc[idx, query_column]
+                    if pd.isna(value) or value is None or str(value).strip() == "":
+                        e="Cannot process empty value"
+                        self.df_processor.processed_df.at[idx, response_column] = e
+                        raise SkippableError(e)
+                    result = func(value, *args, **kwargs)
+                    if force_string:
+                        result = str(result)
+                    self.df_processor.processed_df.at[idx, response_column] = result
+                    break
+                except RetryableError as e:
+                    if attempt < max_retries:
+                        st.warning(f"Error processing row {idx + 1}, retrying (attempt {attempt + 1}/{max_retries}): {e}")
+                        time.sleep(retry_delay)
+                    else:
+                        st.error(f"Retry limit reached for row {idx + 1}. Skipping.")
+                        self.df_processor.processed_df.at[idx, response_column] = f"Error: {e}"
+                except StopProcessingError as e:
+                    st.error(f"Error processing the request: {e}")
+                    return False
+                except SkippableError as e:
+                    st.warning(f"Error processing the request: {e}")
+                    return True
+            return True
+
+        def get_next_batch_indices(start_idx):
+            """Get the next batch of indices to process."""
+            if batch_size == 0:
+                return valid_indices[start_idx:]
+            else:
+                end_idx = min(start_idx + batch_size, len(valid_indices))
+                return valid_indices[start_idx:end_idx]
+
+        # Check if response column exists, create it if not
+        if response_column not in self.df_processor.processed_df.columns:
+            self.df_processor.processed_df[response_column] = pd.NA
+
+        # Create a mask to identify rows that need to be processed (have NaN in the response column)
+        mask = self.df_processor.processed_df[response_column].isna()
+        valid_indices = self.df_processor.processed_df[mask].index
+
+        # Find the first valid index to start processing
+        start_idx = 0
+
+        processed_count = 0  # Track the number of processed rows
+
+        # Process the batch if there are rows to process
+        while start_idx < len(valid_indices):
+            batch_indices = get_next_batch_indices(start_idx)
+            if progress_bar:
+                my_bar = st.progress(0, text="Prepearing the operation")
+                batch_size = len(batch_indices)
+                i=0
+            for idx in batch_indices:
+                i=i+1
+                if not process_row(idx):
+                    return self.df_processor.processed_df  # Stop processing if StopProcessingError occurs
+                
+                if progress_bar:
+                    progress_percent = int(i / batch_size * 100)
+                    my_bar.progress(progress_percent, text=f"Processing batch... {i}/{batch_size}")
+                
+                # Update progress bar after each row
+                processed_count += 1
+                if processed_count % save_interval == 0:
+                    self.app_logger.log_excel(self.df_processor.processed_df, version="processing")  # Save periodically
+
+                # Check if we have processed the specified batch size
+                if batch_size > 0 and processed_count >= batch_size:
+                    st.toast(f'Processed {processed_count} rows. Ready to process a new batch.')
+                    self.app_logger.log_excel(self.df_processor.processed_df, version="processing")
+                    if progress_bar:
+                        my_bar.empty()
+                    return self.df_processor.processed_df
+            
+            start_idx += len(batch_indices)
+            if progress_bar:
+                my_bar.empty()
+            if len(batch_indices) < batch_size:
+                break  # Break if the batch was smaller than batch_size
+
+        # Final save after processing
+        self.app_logger.log_excel(self.df_processor.processed_df, version="processing")
+        
+        if start_idx >= len(valid_indices):
+            st.success('Processing complete! All rows have been processed.')
+
+        return self.df_processor.processed_df
+
+
     def _base_batch_streamlit(self,function,function_ready=True, query_name="query_name", response_name="response_name", function_name="function_name", config_package=None,**kwargs):
         
         if config_package:
     
-                self.batches_constructor.batch_requests(function, 
+                self._batch_requests(function, 
                                     batch_size=config_package.get('batch_size', 0), 
                                     response_column=config_package.get('response_column', 'response'), 
                                     query_column=config_package.get('query_column'), 
@@ -62,7 +168,7 @@ class DfRequestConstructor():
             default_value='Select a column...'
             query_column = st.selectbox(f"Select columns use as {query_name}", 
                                         options=[default_value] + self.df_processor.processed_df.columns.tolist(), help="This is the input colum. Each row will be processed through the function")
-            batch_size = st.number_input(f"{function_name} requests test batch size",min_value=1,max_value=10,step=1,value=3, help="Here you set how many rows to process with a click.")
+            batch_size = st.number_input(f"{function_name} requests batch size",min_value=0,max_value=200,step=1,value=5, help="Here you set how many rows to process with a click. Set 0 to run the whole file")
             response_column = st.text_input(f"{response_name} Column Name",response_name, help="The response from the function will be stored in a column with the name you provide here")
             if query_column == response_column:
                 st.warning("*You should select a different column for the response than what you're using as the input or you'll get into a paradox*")
@@ -75,40 +181,15 @@ class DfRequestConstructor():
                 waiting_input=True 
             else:
                 waiting_input=False
-            
-            #############TEST BATCH RUN################
-            if st.button(f"Run a {function_name} test batch", use_container_width=True, disabled=waiting_input):
-                print("start")
-                try:
-                    print(function)
-                    for progress in self.batches_constructor.batch_requests(
-                        func=function, 
-                        response_column=response_column, 
-                        query_column=query_column, 
-                        batch_size=batch_size, 
-                        **kwargs
-                    ):
-                        if isinstance(progress, str):
-                            st.write(progress)
-                        elif isinstance(progress, pd.DataFrame):
-                            st.write("Processing complete. Displaying updated DataFrame:")
-                            st.dataframe(progress)
-                except Exception as e:
-                    st.error(f"An error occurred: {str(e)}")
-                    print(f"Error details: {e}")
-
-            #############FULL FILE RUN################      
-            if st.button(f"Run {function_name} on the whole file", use_container_width=True, disabled=waiting_input):
-                print("start")
-
-                self.app_logger.post_scheduler_request(
-                                                df=self.df_processor.processed_df,
-                                                function=function, 
-                                                query_column=query_column, 
-                                                response_column=response_column, 
-                                                kwargs=kwargs
-                                                )
-                st.toast("Request sent to the scheduler", icon='🚀')
+                
+            if st.button(f"Run a {function_name} batch", use_container_width=True, disabled=waiting_input):
+                    self._batch_requests(function, 
+                                        batch_size=batch_size, 
+                                        response_column=response_column, 
+                                        query_column=query_column, 
+                                        **kwargs
+                                        )
+        
     
     def llm_request_single_column(self, llm_manager, config_package=None):
         if config_package:
@@ -136,10 +217,7 @@ class DfRequestConstructor():
                 query_name="Content to LLM", 
                 response_name="LLM Response",
                 function_name="LLM",
-                sys_msg=sys_msg,
-                llm_temp=llm_manager.llm_temp,
-                llm_model=llm_manager.model
-                )
+                sys_msg=sys_msg)
         return self.df_processor
 
 
@@ -256,7 +334,6 @@ class DfRequestConstructor():
 
     
     def df_handler(self):
-        st.write("### Table Handler")
         available_columns = st.session_state['available_columns']
         tabs = st.tabs(["Unroll", "Drop", "Merge", "Add", "Rename", "Parse"])
         #column unroller
@@ -354,6 +431,7 @@ class DfRequestConstructor():
         
         self.df_processor.update_columns_list()
         return self.df_processor
+
 
     
 class SingleRequestConstructor():
@@ -501,8 +579,9 @@ class openai_thread_setup():
 
 
     def streamlit_interface(self, df):
-                
-        st.write("### Assistant Setup")
+        
+        st.write("## Assistant Setup")
+        
         thread_name = st.text_input("Thread name",self.app_logger.file_name,max_chars=30,help="This is how you can later select the thread in **🤖My Assistants**" )
         
         goals_example="The objective is to uncover how your target audience talks about competing products and brands, revealing their pain points, desires, and preferences. This insight will highlight opportunities for enhancing our product development and refining your communication strategy to better resonate with potential customers."

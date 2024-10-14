@@ -1,8 +1,6 @@
 from src.file_manager import AppLogger
-import streamlit as st
 import openai
 import groq
-import streamlit as st
 import json
 import time
 import os
@@ -11,9 +9,11 @@ import re
 import tiktoken
 from time import sleep
 from math import ceil
-#from transformers import AutoModel
 from bs4 import BeautifulSoup
 
+def import_streamlit():
+    import streamlit as st
+    return st
 
 #exceptions
 
@@ -29,11 +29,14 @@ class SkippableError(Exception):
 
 class openai_advanced_uses:
 
-    def __init__(self, app_logger: AppLogger):
+    def __init__(self, app_logger: AppLogger, tool_configs=None, credential_manager=None, use_streamlit=True):
+        self.use_streamlit = use_streamlit
+        if self.use_streamlit:
+            st = import_streamlit()
         self.app_logger = app_logger
         self.save_request_log = app_logger.save_request_log
-        self.tool_configs = st.session_state['tool_config']
-        self.credential_manager = st.session_state['credential_manager']
+        self.tool_configs = tool_configs or st.session_state['tool_config']
+        self.credential_manager = credential_manager or st.session_state['credential_manager']
         api_key = self.credential_manager.get_api_key('openai')
         if not api_key:
             raise StopProcessingError("Requires OpenAI api_key to work")
@@ -130,7 +133,8 @@ class openai_advanced_uses:
         new_thread = self.setup_thread(thread_data['thread_name'], thread_data['file_ids'],thread_data['user_setup_msg'],thread_data['assistant_setup_msg'])
         self.openai_client.beta.threads.delete(thread_id)
         self.app_logger.erase_thread_data(thread_id)
-        st.success(f"New Thread id generated: {new_thread.id}")
+        if self.use_streamlit:
+            self.st.success(f"New Thread id generated: {new_thread.id}")
         return new_thread.id
 
     #TEMPORARY USED
@@ -195,46 +199,62 @@ class LlmManager:
         llm_temp (float): The temperature parameter for the LLM (only if 'streamlit' mode).
     """
 
-    def __init__(self, config_key: str="streamlit", app_logger: AppLogger=None):
-        """
-        Initializes the LlmManager.
-
-        Args:
-            config_key (str): 
-                - If 'streamlit', presents a Streamlit UI for model and temperature selection.
-                - Otherwise, directly selects the model based on the `config_key`.
-            app_logger (AppLogger): An instance of the `AppLogger` class for logging.
-
-        Raises:
-            ValueError: If an invalid configuration key is provided.
-        """
+        
+    def __init__(self, config_key: str=None, app_logger: AppLogger=None, credential_manager=None, tool_config=None, use_streamlit=True, llm_temp=0.3):
+        self.use_streamlit = use_streamlit or config_key == "streamlit"
+        self.llm_temp = llm_temp
+        self.setup_logger(app_logger)
+        self.setup_credentials_and_configs(credential_manager, tool_config)
+        self.setup_configurations()
+        self.setup_llm_settings(config_key)
+    def setup_logger(self, app_logger):
+        if app_logger is None:
+            raise ValueError("AppLogger is required")
         self.save_request_log = app_logger.save_request_log
-        self.tool_configs = st.session_state['tool_config']
-        self.credential_manager = st.session_state['credential_manager']
 
-
-        # Initialize configurations for each provider
+    def setup_configurations(self):
         self.configurations = {}
         self._init_openai_config()
         self._init_groq_config()
 
-        if self.configurations == {}:
-            st.error("No LLM model available. Please make sure api_keys are set properly")
-            st.stop()
-        
+    def setup_credentials_and_configs(self, credential_manager, tool_config):
+        if self.use_streamlit:
+            st = import_streamlit()
+            self.credential_manager = credential_manager or st.session_state.get('credential_manager')
+            self.tool_configs = tool_config or st.session_state.get('tool_config')
+        else:
+            self.credential_manager = credential_manager
+            self.tool_configs = tool_config
 
-        if config_key == "streamlit":
-            config_key = st.sidebar.selectbox("llm model",list(self.configurations.keys()))
-            self.llm_temp = st.sidebar.slider("Temperature", min_value=0.0,max_value=2.0, value=0.3 ,step=0.1)
+    def setup_llm_settings(self, config_key):
+        if self.use_streamlit:
+            st = import_streamlit()
+            config_key = st.sidebar.selectbox("llm model", list(self.configurations.keys()))
+            self.llm_temp = st.sidebar.slider("Temperature", min_value=0.0, max_value=2.0, value=self.llm_temp, step=0.1)
+        if not self.configurations:
+            self.handle_no_llm_available()
         
         if config_key not in self.configurations:
             raise ValueError("Invalid configuration key.")
+        
+        self.set_model_attributes(config_key)
 
-        self.model = self.configurations[config_key]['model']
-        self.embedding_source = self.configurations[config_key]['embedding_source']
-        self.embeddings_model = self.configurations[config_key]['embeddings_model']
-        self.client = self.configurations[config_key]['client']
-        self.max_token = self.configurations[config_key]['max_token']
+    def handle_no_llm_available(self):
+        if self.use_streamlit:
+            st = import_streamlit()
+            st.error("No LLM model available. Please make sure api_keys are set properly")
+            st.stop()
+        else:
+            raise ValueError("No LLM model available. Please make sure api_keys are set properly")
+
+    def set_model_attributes(self, config_key):
+        config = self.configurations[config_key]
+        self.model = config['model']
+        self.embedding_source = config['embedding_source']
+        self.embeddings_model = config['embeddings_model']
+        self.client = config['client']
+        self.max_token = config['max_token']
+
 
 
     def _init_openai_config(self):
@@ -298,13 +318,14 @@ class LlmManager:
         else:
             return text
 
-    def llm_request(self, user_msg, sys_msg, json_mode=False, max_retries=3,retry_delay=1, time_limit=40): 
+    def llm_request(self, user_msg, sys_msg, json_mode=False, max_retries=3,retry_delay=1, time_limit=40, **kwargs): 
 
         """Call the llm and return the response. Takes as input the string for user_msg and sys_message.
         Supports json_mode if used for openai models, max_retries, retry_delay and time_limit to handle connection issue with openai"""
         user_msg = self._token_ceiling(user_msg)
-        if not user_msg:
-            return ""
+        sys_msg = self._token_ceiling(sys_msg)
+        if not user_msg or not sys_msg:
+            return None
         final_prompt = [{"role": "user", "content": user_msg}]
         final_prompt.insert (0,{"role": "system", "content": sys_msg})
         
@@ -319,7 +340,7 @@ class LlmManager:
 
             response = self.client.chat.completions.create(**call_params)
             self.save_request_log(response.model_dump_json(), "LLM", "llm_request")
-            return response.choices[0].message.content
+            return response.choices[0].message.content or None
         
         except (openai.AuthenticationError, openai.PermissionDeniedError) as e:
             raise StopProcessingError(f"Encountered an error: {e}")
@@ -389,13 +410,16 @@ class LlmManager:
 
 
 class AudioTranscribe:
-    def __init__(self, app_logger):
+    def __init__(self, app_logger, credential_manager=None, use_streamlit=True):
+        if use_streamlit:
+            self.st = import_streamlit()
         self.save_request_log = app_logger.save_request_log
+        self.credential_manager = credential_manager or self.st.session_state['credential_manager']
         
 
     def whisper_openai_transcribe(self,audio_file, client:openai.OpenAI):
         try:
-            client=client(api_key = st.session_state.get('OPENAI_API_KEY'))
+            client=client(api_key = self.credential_manager.get_api_key('openai'))
             transcription = client.audio.transcriptions.create(
                 model="whisper-1", 
                 file=audio_file
@@ -409,10 +433,12 @@ class AudioTranscribe:
 
 
 class SerpApiManager:
-    def __init__(self,app_logger):
+    def __init__(self,app_logger, credential_manager=None, use_streamlit=True):
         """Initialize the SerpAPIManager and set the url endpoints. API Key needs to be an env variable"""
+        if use_streamlit:   
+            self.st = import_streamlit()
         self.save_request_log = app_logger.save_request_log
-        self.credential_manager = st.session_state['credential_manager']
+        self.credential_manager = credential_manager or self.st.session_state['credential_manager']
         self.base_url = "https://serpapi.com/search"
         pass
     
@@ -498,10 +524,13 @@ class WebScraper:
             return "Crawling failed"
     
 class OxyLabsManager():
-    def __init__(self,app_logger):
-        self.save_request_log = app_logger.save_request_log
+    def __init__(self,app_logger, credential_manager=None, use_streamlit=True):
         """Initialize the Oxylab Manager and set the url endpoints. API Key needs to be an env variable"""
-        self.credential_manager = st.session_state['credential_manager']
+        self.use_streamlit=use_streamlit
+        if self.use_streamlit:
+            self.st = import_streamlit()
+        self.save_request_log = app_logger.save_request_log
+        self.credential_manager = credential_manager or self.st.session_state['credential_manager']
         self.base_url = "https://realtime.oxylabs.io/v1/queries"
         self.paginator_max_pages = 10
         self.request_timeout = 90
@@ -750,6 +779,7 @@ class OxyLabsManager():
 
         # Initialize the status bar if status_bar is True
         if status_bar:
+            st = import_streamlit()
             status_text = st.empty()
             progress_bar = st.progress(0)
 

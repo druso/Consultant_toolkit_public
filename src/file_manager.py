@@ -1,4 +1,4 @@
-import streamlit as st
+
 from io import BytesIO
 import pandas as pd
 import json
@@ -7,34 +7,98 @@ import os
 from datetime import datetime
 import uuid
 import zipfile
+import time
 from typing import Tuple, Any, Optional, List
 import shutil
 
+def import_streamlit():
+    import streamlit as st
+    return st
 
+class FileLockManager:
+    def __init__(self, file_path):
+        self.file_path = file_path
+        self.lock_file = file_path + ".lock"
+
+    def _acquire_lock(self):
+        """Try to acquire a lock by creating a lock file."""
+        while True:
+            try:
+                # Try to create a lock file exclusively
+                fd = os.open(self.lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                # Close the file descriptor to release it after lock acquisition
+                os.close(fd)
+                print(f"Lock acquired on {self.lock_file}")
+                return True
+            except FileExistsError:
+                # If the lock file already exists, wait and retry
+                print(f"Lock already exists. Waiting to acquire lock on {self.lock_file}...")
+                time.sleep(1)  # Wait before retrying
+
+    def _release_lock(self):
+        """Release the lock by deleting the lock file."""
+        if os.path.exists(self.lock_file):
+            os.remove(self.lock_file)
+            print(f"Lock released on {self.lock_file}")
+        else:
+            print(f"No lock to release on {self.lock_file}")
+
+    def secure_write(self, data):
+        """Automatically acquire and release the lock for binary writing."""
+        self._acquire_lock()
+        try:
+            with open(self.file_path, "wb") as file:
+                file.write(data)
+            print(f"Finished writing to {self.file_path}")
+        finally:
+            self._release_lock()
+
+    def secure_read(self):
+        """Automatically acquire and release the lock for reading the file as raw text."""
+        self._acquire_lock()
+        try:
+            with open(self.file_path, "r") as file:
+                data = file.read()  # Reads the file as raw text
+            print(f"Finished reading from {self.file_path}")
+            return data
+        finally:
+            self._release_lock()
 
 
 class DataFrameProcessor:
-    def __init__(self, df: pd.DataFrame):
+    def __init__(self, df: pd.DataFrame, use_streamlit=True):
+        self.use_streamlit = use_streamlit
         self.user_df = df.copy()
-        if 'processed_df' not in st.session_state:
-            st.session_state['processed_df'] = df.copy()
-        
-        self.processed_df = st.session_state['processed_df']
-        if 'available_columns' not in st.session_state:
-            st.session_state['available_columns'] = self.processed_df.columns.tolist()
-        
-        if st.sidebar.button("Refresh columns list", use_container_width=True, help="Will force the refresh of the lists of available columns throughout the application"):
+        self.processed_df = df.copy()
+        if self.use_streamlit:
+            self.st = import_streamlit()
+            self._initialize_streamlit()
+
+    def _initialize_streamlit(self):
+        if 'processed_df' not in self.st.session_state:
+            self.st.session_state['processed_df'] = self.processed_df
+
+        self.processed_df = self.st.session_state['processed_df']
+
+        if 'available_columns' not in self.st.session_state:
+            self.st.session_state['available_columns'] = self.processed_df.columns.tolist()
+
+        self._add_streamlit_buttons()
+
+    def _add_streamlit_buttons(self):
+        if self.st.sidebar.button("Refresh columns list", use_container_width=True, 
+                                  help="Will force the refresh of the lists of available columns throughout the application"):
             self.update_columns_list()
 
-        if st.sidebar.button('Restore Processing', use_container_width=True, help="Will restore the file to the originally uploaded file"):
-            st.session_state["app_logger"].reinitialize_session_id()
-            st.session_state["app_logger"].log_excel(self.user_df,"original")
+        if self.st.sidebar.button('Restore Processing', use_container_width=True, 
+                                  help="Will restore the file to the originally uploaded file"):
+            self.st.session_state["app_logger"].reinitialize_session_id()
+            self.st.session_state["app_logger"].log_excel(self.user_df, "original")
             self.reset_to_original()
 
     def update_columns_list(self):
-        st.session_state['available_columns'] = self.processed_df.columns.tolist()
-        
-
+        if self.use_streamlit:
+            self.st.session_state['available_columns'] = self.processed_df.columns.tolist()
     def unroll_json(self, column_name: str) -> pd.DataFrame:
         """
         Unrolls (flattens) JSON data within a specified column of the DataFrame.
@@ -246,6 +310,9 @@ class DataFrameProcessor:
         Resets the processed DataFrame to the original state.
         """
         self.processed_df = self.user_df.copy()
+        if self.use_streamlit:
+            self.st.session_state['processed_df'] = self.processed_df
+            self.update_columns_list()
 
     
 
@@ -254,11 +321,18 @@ class AppLogger() :
     """
     Handles most of I/O operations for storing the activities
     """
-    def __init__(self, user_id: str):
+    def __init__(self, user_id: str, tool_config=None, use_streamlit=True):
         """Initializes the logger with a session ID and default values."""
+        self.user_id = user_id
         self.session_id = datetime.now().strftime('%y%m%d') +"_"+ str(uuid.uuid4())[:6]
         self.file_name = "default"
-        logs_root_folder = os.getenv('LOGS_ROOT_FOLDER') or st.session_state.get('tool_config', {}).get('logs_root_folder') or "logs"
+        if use_streamlit:
+            self.st = import_streamlit()
+            self.tool_config = self.st.session_state.get('tool_config', {})
+            logs_root_folder = os.getenv('LOGS_ROOT_FOLDER') or self.st.session_state.get('tool_config', {}).get('logs_root_folder') or "logs"
+        else: 
+            logs_root_folder = os.getenv('LOGS_ROOT_FOLDER') or tool_config.get('logs_root_folder') or "logs"
+            self.tool_config = tool_config
         self.logs_folder = f"{logs_root_folder}/{user_id}"
         self.log_types = ["files", "requests", "openai_threads"]
         
@@ -278,10 +352,10 @@ class AppLogger() :
         os.makedirs(folder, exist_ok=True)
         return folder
     
-    def save_original_file(self, uploaded_file):
+    
+    def save_original_file(self, uploaded_file, force_save=False):
         folder = self.session_files_folder()
         os.makedirs(folder, exist_ok=True)
-
 
         def save_single_file(file, index=None):
             if index is not None:
@@ -289,9 +363,15 @@ class AppLogger() :
             else:
                 file_name = f"original_{file.name}"
             file_path = os.path.join(folder, file_name)
-            with open(file_path, "wb") as f:
-                f.write(file.getbuffer())
-                print (f"Saved original file {file_path}")
+            
+            if force_save or not os.path.exists(file_path):
+                with open(file_path, "wb") as f:
+                    FileLockManager(file_path).secure_write(file.getbuffer())
+                    #f.write(file.getbuffer())#####################################################################################
+                print(f"Saved original file {file_path}")
+            else:
+                #print(f"File {file_path} already exists. Skipping.")
+                pass
 
         if isinstance(uploaded_file, list):
             for index, file in enumerate(uploaded_file):
@@ -330,8 +410,7 @@ class AppLogger() :
         return processed_data
 
 
-
-    def log_excel(self, df: pd.DataFrame, version: str = "processed", return_path = False) -> None:
+    def log_excel(self, df: pd.DataFrame, version: str = "processed", return_path = False, return_filename=False) -> None:
         """
         Saves a Pandas DataFrame to an Excel file within the session's logs folder.
 
@@ -343,12 +422,16 @@ class AppLogger() :
         """
         folder = self.session_files_folder()
         os.makedirs(folder, exist_ok=True)
-        path=f"{folder}/{version}_{self.file_name.split('.', 1)[0]}.xlsx"
+        filename = f"{version}_{self.file_name.split('.', 1)[0]}.xlsx"
+        path=f"{folder}/{filename}"
         with open(path, "wb") as f:
-            f.write(self.to_excel(df))
+            #f.write(self.to_excel(df))
+            FileLockManager(path).secure_write(self.to_excel(df))
         print (f"saved excel log at {path}")
         if return_path:
             return path
+        if return_filename:
+            return filename
 
     def save_request_log(self, response: dict, service: str, calltype: str) -> None:
         """
@@ -423,7 +506,6 @@ class AppLogger() :
  
         return thread_list
     
-
     def get_thread_info(self, thread_id):
         file_path = os.path.join(self.openai_threads_folder, thread_id + ".json")
         try:
@@ -431,7 +513,10 @@ class AppLogger() :
                 thread_data = json.load(f)
                 return thread_data
         except:
-            st.error(f"thread log for thread id: {thread_id} does not exist")
+            if self.use_streamlit:  
+                self.st.error(f"thread log for thread id: {thread_id} does not exist")
+            else:
+                print(f"thread log for thread id: {thread_id} does not exist")
 
     def get_thread_history(self, thread_id):
         thread_file = self.get_thread_info(thread_id)
@@ -443,17 +528,54 @@ class AppLogger() :
         with open(f"{self.openai_threads_folder}/{thread_id}.json", "w") as f:
             json.dump(thread_file, f, indent=4)
 
-
-
     def erase_thread_data(self, thread_id):
         file_path = os.path.join(self.openai_threads_folder, thread_id + ".json")
         try:
             os.remove(file_path)
-            st.success(f"Thread data for thread id: {thread_id} has been deleted.")
+            if self.use_streamlit:  
+                self.st.success(f"Thread data for thread id: {thread_id} has been deleted.")
+            else:
+                print(f"Thread data for thread id: {thread_id} has been deleted.")
         except FileNotFoundError:
             print(f"Thread log for thread id: {thread_id} does not exist.")
         except Exception as e:
             print(f"Error deleting thread log: {e}")
+
+    def batches_list(self):
+        folder = self.tool_config.get('shared_folder', 'shared')
+        batches_folder = os.path.join(folder, 'batches')
+        return os.listdir(batches_folder)
+        
+    def post_scheduler_request(self,df, function, query_column, response_column, kwargs):
+        
+        batches_list = self.batches_list()
+        batch_id = "batch_" + str(len(batches_list) + 1).zfill(3)
+
+        input_file = self.log_excel( df, "batch", return_path = False, return_filename=True) 
+        function_name = function.__name__ if callable(function) else function
+        processed_kwargs = {}
+        for key, value in kwargs.items():
+            if callable(value):
+                processed_kwargs[key] = value.__name__  # Store function name as string
+            elif isinstance(value, (int, float, str, bool, type(None))):
+                processed_kwargs[key] = value  # These types are JSON serializable
+            else:
+                processed_kwargs[key] = str(value)  # Convert other types to string
+        payload={
+            "batch_id": batch_id,
+            "user_id": self.user_id,
+            "session_id": self.session_id,
+            "function": function_name,
+            "batch_size": 3,####################################################################
+            "input_file": input_file,
+            "query_column": query_column,
+            "response_column": response_column,
+            "kwargs": processed_kwargs
+                }
+        folder= self.tool_config.get('shared_folder', 'shared')
+        with open(f"{folder}/batches/{batch_id}_PENDING.json", "w") as f:
+            json.dump(payload, f, indent=4)
+            print(f"saved batch request at {folder}/batches/{batch_id}_PENDING.json")
 
 
 
@@ -462,7 +584,7 @@ class DataLoader:
     """
     Handles the loading of file into the application
     """
-    def __init__(self, config_key: str, app_logger:AppLogger):
+    def __init__(self, config_key: str, app_logger:AppLogger, use_streamlit=True):
 
         self.configurations = {
             "dataframe": {'extensions': ['csv', 'xls', 'xlsx'], 
@@ -476,6 +598,8 @@ class DataLoader:
                      'handler': None, 
                      'default':""}
         }
+        if use_streamlit:
+            self.st = import_streamlit()
         if config_key not in self.configurations:
             raise ValueError("Invalid configuration key.")
         self.app_logger = app_logger
@@ -483,7 +607,8 @@ class DataLoader:
         self.handler = self.configurations[config_key]['handler']
         self.default = self.configurations[config_key]['default']
         self.accept_multiple_files =  self.configurations[config_key].get('accept_multiple_file', False)
-        uploaded_file = st.sidebar.file_uploader("Choose a file", type=self.file_types, accept_multiple_files=self.accept_multiple_files)
+        if use_streamlit:
+            uploaded_file = self.st.sidebar.file_uploader("Choose a file", type=self.file_types, accept_multiple_files=self.accept_multiple_files)
         if uploaded_file:
             self.user_file = self.load_user_file(uploaded_file)
             self.app_logger.save_original_file(uploaded_file)
@@ -491,7 +616,8 @@ class DataLoader:
         else:
             self.user_file = None
             self.content = self.default
-            st.write ("## Upload a file using the widget in the sidebar to start")
+            if use_streamlit:   
+                self.st.write ("## Upload a file using the widget in the sidebar to start")
             
     def _dataframe_handler(self, uploaded_file) -> pd.DataFrame:
         try:
@@ -503,7 +629,10 @@ class DataLoader:
                 return pd.read_excel(uploaded_file, engine='openpyxl', 
                                      dtype=str)         # Load everything as strings initially
         except Exception as e:
-            st.sidebar.error(f"Failed to load data: {e}")
+            if self.use_streamlit:  
+                self.st.sidebar.error(f"Failed to load data: {e}")
+            else:
+                print(f"Failed to load data: {e}")
             return self.default
         
     def _doc_handler(self, uploaded_files) -> str:
@@ -520,14 +649,18 @@ class DataLoader:
                     # For other types, use textract
                     temp_file_path = '/tmp/' + uploaded_file.name
                     with open(temp_file_path, "wb") as f:
-                        f.write(uploaded_file.getbuffer())
+                        #f.write(uploaded_file.getbuffer())##########################################################################################
+                        FileLockManager(temp_file_path).secure_write(uploaded_file.getbuffer())
 
                     # Extract text from the saved file using textract
                     text = textract.process(temp_file_path).decode('utf-8')
                 
                 concatenated_text += text
             except Exception as e:
-                st.sidebar.error(f"Failed to load document {uploaded_file.name}: {e}")
+                if self.use_streamlit:
+                    self.st.sidebar.error(f"Failed to load document {uploaded_file.name}: {e}")
+                else:
+                    print(f"Failed to load document {uploaded_file.name}: {e}")
                 concatenated_text += self.default
         
         return concatenated_text

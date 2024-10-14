@@ -8,13 +8,15 @@ logs_root_folder: logs
 
 ## Assistants base config 
 assistant_configs:
-  assistant_name: 'Generic Data Analyst'
+  assistant_name: Generic Data Analyst
   tools:
-    - type: "code_interpreter"
-  model: "gpt-4o"
+    - type: code_interpreter
+  model: gpt-4o
   temperature: 0.1
 
-
+# Scheduler setup
+shared_folder: shared
+scheduler_frequency: 60
 
 # Services
 ## Set to true to use the service.
