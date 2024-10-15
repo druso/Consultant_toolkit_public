@@ -1,5 +1,5 @@
 
-from io import BytesIO
+from io import BytesIO, StringIO
 import pandas as pd
 import json
 import textract
@@ -28,20 +28,20 @@ class FileLockManager:
                 fd = os.open(self.lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                 # Close the file descriptor to release it after lock acquisition
                 os.close(fd)
-                print(f"Lock acquired on {self.lock_file}")
+                #print(f"Lock acquired on {self.lock_file}")
                 return True
             except FileExistsError:
                 # If the lock file already exists, wait and retry
-                print(f"Lock already exists. Waiting to acquire lock on {self.lock_file}...")
+                #print(f"Lock already exists. Waiting to acquire lock on {self.lock_file}...")
                 time.sleep(1)  # Wait before retrying
 
     def _release_lock(self):
         """Release the lock by deleting the lock file."""
         if os.path.exists(self.lock_file):
             os.remove(self.lock_file)
-            print(f"Lock released on {self.lock_file}")
-        else:
-            print(f"No lock to release on {self.lock_file}")
+            #print(f"Lock released on {self.lock_file}")
+        #else:
+            #print(f"No lock to release on {self.lock_file}")
 
     def secure_write(self, data):
         """Automatically acquire and release the lock for binary writing."""
@@ -49,7 +49,7 @@ class FileLockManager:
         try:
             with open(self.file_path, "wb") as file:
                 file.write(data)
-            print(f"Finished writing to {self.file_path}")
+            #print(f"Finished writing to {self.file_path}")
         finally:
             self._release_lock()
 
@@ -59,7 +59,7 @@ class FileLockManager:
         try:
             with open(self.file_path, "r") as file:
                 data = file.read()  # Reads the file as raw text
-            print(f"Finished reading from {self.file_path}")
+            #print(f"Finished reading from {self.file_path}")
             return data
         finally:
             self._release_lock()
@@ -367,7 +367,6 @@ class AppLogger() :
             if force_save or not os.path.exists(file_path):
                 with open(file_path, "wb") as f:
                     FileLockManager(file_path).secure_write(file.getbuffer())
-                    #f.write(file.getbuffer())#####################################################################################
                 print(f"Saved original file {file_path}")
             else:
                 #print(f"File {file_path} already exists. Skipping.")
@@ -566,19 +565,96 @@ class AppLogger() :
             "user_id": self.user_id,
             "session_id": self.session_id,
             "function": function_name,
-            "batch_size": 3,####################################################################
+            "batch_size": 10,
             "input_file": input_file,
             "query_column": query_column,
             "response_column": response_column,
             "kwargs": processed_kwargs
                 }
         folder= self.tool_config.get('shared_folder', 'shared')
-        with open(f"{folder}/batches/{batch_id}_PENDING.json", "w") as f:
+        with open(f"{folder}/batches/{self.user_id}_{batch_id}_PENDING.json", "w") as f:
             json.dump(payload, f, indent=4)
             print(f"saved batch request at {folder}/batches/{batch_id}_PENDING.json")
 
 
 
+    def load_batches_summary(self, csv_path):
+        """Load the batches summary CSV file using FileLockManager."""
+        lock_manager = FileLockManager(csv_path)
+        try:
+            csv_content = lock_manager.secure_read()
+            return pd.read_csv(StringIO(csv_content))
+        except FileNotFoundError:
+            print(f"CSV file not found at {csv_path}")
+            return pd.DataFrame()
+        except Exception as e:
+            print(f"Error loading CSV: {str(e)}")
+            return pd.DataFrame()
+
+    def streamlit_batches_status(self):
+        self.st.header("Batch Processing Status")
+        
+        csv_path = os.path.join(self.tool_config['shared_folder'], 'batches_summary.csv')
+        
+        # Load the CSV file
+        batches_df = self.load_batches_summary(csv_path)
+        if  self.st.sidebar.button("update batch list", use_container_width=True):
+            batches_df = self.load_batches_summary(csv_path)
+        
+        if batches_df.empty:
+            self.st.warning("No batch data available.")
+            return
+        
+        batches_df = batches_df[batches_df['user_id'] == self.user_id]
+        # Display recap of batches in the pipeline
+        self.st.subheader("Batches Recap")
+        total_batches = len(batches_df)
+        completed_batches = len(batches_df[batches_df['status'] == 'COMPLETED'])
+        pending_batches = len(batches_df[batches_df['status'] == 'PENDING'])
+        
+        col1, col2, col3 = self.st.columns(3)
+        col1.metric("Total Batches", total_batches)
+        col2.metric("Completed Batches", completed_batches)
+        col3.metric("Pending Batches", pending_batches)
+
+        # Display the DataFrame
+        self.st.subheader("Batches Data")
+        
+        columns_to_display = ['filename', 'status', 'batch_id', 'session_id', 'function']
+        
+        self.st.dataframe(batches_df[columns_to_display])
+
+        # Add a select box for completed batches
+        completed_batches = batches_df[batches_df['status'] == 'COMPLETED']
+        if not completed_batches.empty:
+            selected_filename = self.st.selectbox(
+                "Select a completed batch to download:",
+                options=completed_batches['filename'].tolist(),
+                #format_func=lambda x: f"{x} - {completed_batches[completed_batches['filename'] == x]['batch_id'].values[0]}"
+            )
+
+            if selected_filename:
+                selected_row = completed_batches[completed_batches['filename'] == selected_filename].iloc[0]
+                
+                # Construct the path to the output file
+                filename = f"processed_{selected_row['input_file']}"
+                
+                output_file_path = os.path.join(self.tool_config['logs_root_folder'], f"{self.user_id}","files", f"{selected_row['session_id']}", filename)
+
+
+                # Check if the output file exists
+                if os.path.isfile(output_file_path):
+                    with open(output_file_path, "rb") as file:
+                        self.st.download_button(
+                            label="Download Output File",
+                            data=file,
+                            file_name=filename,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                else:
+                    self.st.warning("Output file not found for the selected batch.")
+        else:
+            self.st.info("No completed batches available for download.")
 
 class DataLoader:
     """
@@ -649,7 +725,6 @@ class DataLoader:
                     # For other types, use textract
                     temp_file_path = '/tmp/' + uploaded_file.name
                     with open(temp_file_path, "wb") as f:
-                        #f.write(uploaded_file.getbuffer())##########################################################################################
                         FileLockManager(temp_file_path).secure_write(uploaded_file.getbuffer())
 
                     # Extract text from the saved file using textract
@@ -664,6 +739,8 @@ class DataLoader:
                 concatenated_text += self.default
         
         return concatenated_text
+
+
 
     def load_user_file(self, uploaded_file):
         if self.handler:

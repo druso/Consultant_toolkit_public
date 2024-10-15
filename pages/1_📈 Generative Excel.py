@@ -44,6 +44,7 @@ if st.session_state["authentication_status"]:
             openai_thread_setup(openai_advance_manager).streamlit_interface(df_processor.processed_df)
         with tabs[6]:
             st.write("### Scheduler - Work in Progress")
+            
 
         st.divider()
         # Show a preview of the processed file
@@ -67,7 +68,8 @@ if st.session_state["authentication_status"]:
                 type="primary",
                 key="download_button_footer"
             )
-
+    st.divider()
+    app_logger.streamlit_batches_status()
 elif st.session_state["authentication_status"] is False:
     st.error('Username/password is incorrect')
     st.sidebar.error('Username/password is incorrect')
