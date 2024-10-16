@@ -1,9 +1,10 @@
+import logging
+logger = logging.getLogger(__name__)
 import streamlit as st
 import os
-from src.file_manager import DataLoader
-from src.request_processor import SingleRequestConstructor
+from src.streamlit_interface import SingleRequestConstructor
 from src.external_tools import LlmManager, AudioTranscribe
-from src.setup import page_setup, page_footer
+from src.streamlit_setup import page_setup, page_footer, DataLoader, configure_llm_streamlit
 import io
 from openai import OpenAI
 
@@ -13,13 +14,15 @@ page_setup(page_config)
 
 if st.session_state["authentication_status"]:
     app_logger = st.session_state["app_logger"]
+    credential_manager = st.session_state['credential_manager']
 
     data_loader = DataLoader("audio", app_logger)
 
     if data_loader.user_file:
 
-        llm_manager = LlmManager("streamlit",app_logger)
-        audio_transcriber = AudioTranscribe(app_logger)
+        llm_manager = LlmManager(app_logger,credential_manager)
+        llm_manager = configure_llm_streamlit(llm_manager, LlmManager, app_logger)
+        audio_transcriber = AudioTranscribe(app_logger, st.session_state['credential_manager'])
         transcript = ""
         
         tabs= st.tabs(["Transcribe","Summarize"])

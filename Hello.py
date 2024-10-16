@@ -1,7 +1,9 @@
-from src.setup import page_setup, page_footer
+import logging
+logger = logging.getLogger(__name__)
+from src.streamlit_setup import page_setup, page_footer
 import streamlit as st
 import pandas as pd
-import os
+
 
 page_config = {'page_title':"Consulting toolkit",
           'page_icon':"🛠️",}

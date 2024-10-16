@@ -16,7 +16,7 @@ assistant_configs:
 
 # Scheduler setup
 shared_folder: shared
-scheduler_frequency: 60
+scheduler_frequency: 180
 
 # Services
 ## Set to true to use the service.
@@ -24,6 +24,8 @@ scheduler_frequency: 60
 ## this key will be searched as env variable, if not found will be required to the user
 
 ## LLMs
+default_llm: gpt-4o-mini
+
 groq:
   use: True
   key: GROQ_API_KEY

@@ -1,4 +1,7 @@
+import logging
+logger = logging.getLogger(__name__)
 from src.file_manager import AppLogger
+from src.setup import CredentialManager
 import openai
 import groq
 import json
@@ -11,12 +14,8 @@ from time import sleep
 from math import ceil
 from bs4 import BeautifulSoup
 
-def import_streamlit():
-    import streamlit as st
-    return st
 
 #exceptions
-
 class RetryableError(Exception):
     pass
 
@@ -29,14 +28,11 @@ class SkippableError(Exception):
 
 class openai_advanced_uses:
 
-    def __init__(self, app_logger: AppLogger, tool_configs=None, credential_manager=None, use_streamlit=True):
-        self.use_streamlit = use_streamlit
-        if self.use_streamlit:
-            st = import_streamlit()
+    def __init__(self, app_logger: AppLogger, credential_manager=None):
         self.app_logger = app_logger
         self.save_request_log = app_logger.save_request_log
-        self.tool_configs = tool_configs or st.session_state['tool_config']
-        self.credential_manager = credential_manager or st.session_state['credential_manager']
+        self.tool_configs = app_logger.tool_config
+        self.credential_manager = credential_manager
         api_key = self.credential_manager.get_api_key('openai')
         if not api_key:
             raise StopProcessingError("Requires OpenAI api_key to work")
@@ -45,7 +41,7 @@ class openai_advanced_uses:
         pass
     
     #HANDLE FILES
-    #USED
+
     def openai_upload_file(self, file_path, purpose):
         return self.openai_client.files.create(
             file=open(file_path, "rb"),
@@ -133,8 +129,6 @@ class openai_advanced_uses:
         new_thread = self.setup_thread(thread_data['thread_name'], thread_data['file_ids'],thread_data['user_setup_msg'],thread_data['assistant_setup_msg'])
         self.openai_client.beta.threads.delete(thread_id)
         self.app_logger.erase_thread_data(thread_id)
-        if self.use_streamlit:
-            self.st.success(f"New Thread id generated: {new_thread.id}")
         return new_thread.id
 
     #TEMPORARY USED
@@ -179,81 +173,58 @@ class LlmManager:
     """
     Manages interactions with Large Language Models (LLMs) using the OpenAI or Groq API.
 
-    This class encapsulates the logic for selecting an LLM model (e.g., GPT-3, Llama, Mixtral), 
-    configuring its parameters (temperature), and handling interactions with the chosen API.
-    It also provides functionality for generating embeddings from the LLM.
-
     Attributes:
-        configurations (dict): A dictionary of LLM configurations, each containing:
-            - model (str): The name of the model.
-            - client (object): The API client instance for the model (OpenAI or Groq).
-            - embedding_source (str): The source for generating embeddings ("openai" or "huggingface").
-            - embeddings_model (str): The specific model used for embeddings.
-            - max_token (int): Maximum token limit for the model.
-        model (str): The name of the currently selected LLM model.
+        configurations (dict): A dictionary of LLM configurations.
+        model (str): The name of the selected LLM model.
         embedding_source (str): The source used for generating embeddings.
         embeddings_model (str): The specific model used for embeddings.
         client (object): The API client instance for the selected LLM model.
         max_token (int): Maximum token limit for the selected LLM model.
-        save_request_log (callable): A method (from AppLogger) for saving request logs.
-        llm_temp (float): The temperature parameter for the LLM (only if 'streamlit' mode).
+        save_request_log (callable): Method for saving request logs.
+        llm_temp (float): The temperature parameter for the LLM.
     """
 
+    def __init__(
+        self,
+        app_logger: AppLogger,
+        credential_manager: CredentialManager,
+        config_key: str = None,
+        llm_temp: float = 0.3,
+    ):
         
-    def __init__(self, config_key: str=None, app_logger: AppLogger=None, credential_manager=None, tool_config=None, use_streamlit=True, llm_temp=0.3):
-        self.use_streamlit = use_streamlit or config_key == "streamlit"
+        self.tool_configs = app_logger.tool_config
         self.llm_temp = llm_temp
-        self.setup_logger(app_logger)
-        self.setup_credentials_and_configs(credential_manager, tool_config)
-        self.setup_configurations()
-        self.setup_llm_settings(config_key)
-    def setup_logger(self, app_logger):
-        if app_logger is None:
-            raise ValueError("AppLogger is required")
         self.save_request_log = app_logger.save_request_log
+        self.credential_manager = credential_manager
 
-    def setup_configurations(self):
         self.configurations = {}
         self._init_openai_config()
         self._init_groq_config()
+        
+        self.setup_llm_settings(config_key)
 
-    def setup_credentials_and_configs(self, credential_manager, tool_config):
-        if self.use_streamlit:
-            st = import_streamlit()
-            self.credential_manager = credential_manager or st.session_state.get('credential_manager')
-            self.tool_configs = tool_config or st.session_state.get('tool_config')
-        else:
-            self.credential_manager = credential_manager
-            self.tool_configs = tool_config
 
     def setup_llm_settings(self, config_key):
-        if self.use_streamlit:
-            st = import_streamlit()
-            config_key = st.sidebar.selectbox("llm model", list(self.configurations.keys()))
-            self.llm_temp = st.sidebar.slider("Temperature", min_value=0.0, max_value=2.0, value=self.llm_temp, step=0.1)
         if not self.configurations:
-            self.handle_no_llm_available()
+            raise ValueError("No LLM model available. Please ensure API keys are set properly.")
         
+        if config_key is None:
+            config_key = self.tool_configs.get('default_llm')
+
         if config_key not in self.configurations:
-            raise ValueError("Invalid configuration key.")
-        
+            raise ValueError(f"Invalid configuration key: {config_key}")
+
         self.set_model_attributes(config_key)
 
-    def handle_no_llm_available(self):
-        if self.use_streamlit:
-            st = import_streamlit()
-            st.error("No LLM model available. Please make sure api_keys are set properly")
-            st.stop()
-        else:
-            raise ValueError("No LLM model available. Please make sure api_keys are set properly")
+
 
     def set_model_attributes(self, config_key):
         config = self.configurations[config_key]
-        self.model = config['model']
-        self.embedding_source = config['embedding_source']
-        self.embeddings_model = config['embeddings_model']
-        self.client = config['client']
-        self.max_token = config['max_token']
+        self.model = config["model"]
+        self.embedding_source = config["embedding_source"]
+        self.embeddings_model = config["embeddings_model"]
+        self.client = config["client"]
+        self.max_token = config["max_token"]
 
 
 
@@ -410,11 +381,9 @@ class LlmManager:
 
 
 class AudioTranscribe:
-    def __init__(self, app_logger, credential_manager=None, use_streamlit=True):
-        if use_streamlit:
-            self.st = import_streamlit()
+    def __init__(self, app_logger, credential_manager):
         self.save_request_log = app_logger.save_request_log
-        self.credential_manager = credential_manager or self.st.session_state['credential_manager']
+        self.credential_manager = credential_manager
         
 
     def whisper_openai_transcribe(self,audio_file, client:openai.OpenAI):
@@ -433,12 +402,10 @@ class AudioTranscribe:
 
 
 class SerpApiManager:
-    def __init__(self,app_logger, credential_manager=None, use_streamlit=True):
+    def __init__(self,app_logger, credential_manager):
         """Initialize the SerpAPIManager and set the url endpoints. API Key needs to be an env variable"""
-        if use_streamlit:   
-            self.st = import_streamlit()
         self.save_request_log = app_logger.save_request_log
-        self.credential_manager = credential_manager or self.st.session_state['credential_manager']
+        self.credential_manager = credential_manager
         self.base_url = "https://serpapi.com/search"
         pass
     
@@ -524,13 +491,10 @@ class WebScraper:
             return "Crawling failed"
     
 class OxyLabsManager():
-    def __init__(self,app_logger, credential_manager=None, use_streamlit=True):
+    def __init__(self,app_logger, credential_manager):
         """Initialize the Oxylab Manager and set the url endpoints. API Key needs to be an env variable"""
-        self.use_streamlit=use_streamlit
-        if self.use_streamlit:
-            self.st = import_streamlit()
         self.save_request_log = app_logger.save_request_log
-        self.credential_manager = credential_manager or self.st.session_state['credential_manager']
+        self.credential_manager = credential_manager
         self.base_url = "https://realtime.oxylabs.io/v1/queries"
         self.paginator_max_pages = 10
         self.request_timeout = 90
@@ -769,7 +733,7 @@ class OxyLabsManager():
             return formatted_results
     
 
-    def serp_paginator(self, query, num_results, fix_position=True, status_bar=False, **kwargs):
+    def serp_paginator(self, query, num_results, fix_position=True, **kwargs):
         results = []
         start_page = kwargs.get('start_page', 1)  # Allowing start_page to be set via kwargs
         actual_num_results = num_results
@@ -778,10 +742,10 @@ class OxyLabsManager():
         max_retries = 3
 
         # Initialize the status bar if status_bar is True
-        if status_bar:
+        """if status_bar:
             st = import_streamlit()
             status_text = st.empty()
-            progress_bar = st.progress(0)
+            progress_bar = st.progress(0)"""
 
         while len(results) < actual_num_results:
             remaining_results = actual_num_results - len(results)
@@ -793,10 +757,10 @@ class OxyLabsManager():
             current_kwargs['start_page'] = str(start_page)
 
             # Update status bar
-            if status_bar:
+            """if status_bar:
                 status_text.text(f"Fetching results for '{query}' (Page {start_page} to {start_page + pages_to_fetch - 1})")
                 progress = len(results) / actual_num_results
-                progress_bar.progress(min(progress, 1.0))
+                progress_bar.progress(min(progress, 1.0))"""
 
             retry_count = 0
             while retry_count < max_retries:
@@ -809,8 +773,8 @@ class OxyLabsManager():
                     retry_count += 1
                     if retry_count < max_retries:
                         print(f"Retryable error occurred: {str(e)}. Retrying in 5 seconds... ({retry_count}/{max_retries})")
-                        if status_bar:
-                            status_text.text(f"Retrying... ({retry_count}/{max_retries})")
+                        """if status_bar:
+                            status_text.text(f"Retrying... ({retry_count}/{max_retries})")"""
                         sleep(5)
                     else:
                         print(f"Max retries reached for retryable error: {str(e)}")
@@ -820,9 +784,9 @@ class OxyLabsManager():
                     page_results = []
                     break
                 except StopProcessingError:
-                    if status_bar:
+                    """if status_bar:
                         status_text.text("Error: Stopped processing")
-                        progress_bar.progress(1.0)
+                        progress_bar.progress(1.0)"""
                     print("Processing was stopped due to a StopProcessingError.")
                     raise
 
@@ -858,8 +822,8 @@ class OxyLabsManager():
                 result['position'] = new_position
 
         # Update status bar to show completion
-        if status_bar:
+        """if status_bar:
             status_text.text(f"Finished fetching results for '{query}'")
-            progress_bar.progress(1.0)
+            progress_bar.progress(1.0)"""
 
         return results

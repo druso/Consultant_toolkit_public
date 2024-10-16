@@ -1,8 +1,8 @@
-
+import logging
+logger = logging.getLogger(__name__)
 from io import BytesIO, StringIO
 import pandas as pd
 import json
-import textract
 import os
 from datetime import datetime
 import uuid
@@ -11,9 +11,6 @@ import time
 from typing import Tuple, Any, Optional, List
 import shutil
 
-def import_streamlit():
-    import streamlit as st
-    return st
 
 class FileLockManager:
     def __init__(self, file_path):
@@ -66,39 +63,11 @@ class FileLockManager:
 
 
 class DataFrameProcessor:
-    def __init__(self, df: pd.DataFrame, use_streamlit=True):
-        self.use_streamlit = use_streamlit
+    def __init__(self, df: pd.DataFrame,):
         self.user_df = df.copy()
         self.processed_df = df.copy()
-        if self.use_streamlit:
-            self.st = import_streamlit()
-            self._initialize_streamlit()
 
-    def _initialize_streamlit(self):
-        if 'processed_df' not in self.st.session_state:
-            self.st.session_state['processed_df'] = self.processed_df
-
-        self.processed_df = self.st.session_state['processed_df']
-
-        if 'available_columns' not in self.st.session_state:
-            self.st.session_state['available_columns'] = self.processed_df.columns.tolist()
-
-        self._add_streamlit_buttons()
-
-    def _add_streamlit_buttons(self):
-        if self.st.sidebar.button("Refresh columns list", use_container_width=True, 
-                                  help="Will force the refresh of the lists of available columns throughout the application"):
-            self.update_columns_list()
-
-        if self.st.sidebar.button('Restore Processing', use_container_width=True, 
-                                  help="Will restore the file to the originally uploaded file"):
-            self.st.session_state["app_logger"].reinitialize_session_id()
-            self.st.session_state["app_logger"].log_excel(self.user_df, "original")
-            self.reset_to_original()
-
-    def update_columns_list(self):
-        if self.use_streamlit:
-            self.st.session_state['available_columns'] = self.processed_df.columns.tolist()
+            
     def unroll_json(self, column_name: str) -> pd.DataFrame:
         """
         Unrolls (flattens) JSON data within a specified column of the DataFrame.
@@ -310,9 +279,6 @@ class DataFrameProcessor:
         Resets the processed DataFrame to the original state.
         """
         self.processed_df = self.user_df.copy()
-        if self.use_streamlit:
-            self.st.session_state['processed_df'] = self.processed_df
-            self.update_columns_list()
 
     
 
@@ -321,18 +287,13 @@ class AppLogger() :
     """
     Handles most of I/O operations for storing the activities
     """
-    def __init__(self, user_id: str, tool_config=None, use_streamlit=True):
+    def __init__(self, user_id: str, tool_config):
         """Initializes the logger with a session ID and default values."""
         self.user_id = user_id
         self.session_id = datetime.now().strftime('%y%m%d') +"_"+ str(uuid.uuid4())[:6]
         self.file_name = "default"
-        if use_streamlit:
-            self.st = import_streamlit()
-            self.tool_config = self.st.session_state.get('tool_config', {})
-            logs_root_folder = os.getenv('LOGS_ROOT_FOLDER') or self.st.session_state.get('tool_config', {}).get('logs_root_folder') or "logs"
-        else: 
-            logs_root_folder = os.getenv('LOGS_ROOT_FOLDER') or tool_config.get('logs_root_folder') or "logs"
-            self.tool_config = tool_config
+        logs_root_folder = os.getenv('LOGS_ROOT_FOLDER') or tool_config.get('logs_root_folder') or "logs"
+        self.tool_config = tool_config
         self.logs_folder = f"{logs_root_folder}/{user_id}"
         self.log_types = ["files", "requests", "openai_threads"]
         
@@ -512,10 +473,7 @@ class AppLogger() :
                 thread_data = json.load(f)
                 return thread_data
         except:
-            if self.use_streamlit:  
-                self.st.error(f"thread log for thread id: {thread_id} does not exist")
-            else:
-                print(f"thread log for thread id: {thread_id} does not exist")
+            print(f"thread log for thread id: {thread_id} does not exist")
 
     def get_thread_history(self, thread_id):
         thread_file = self.get_thread_info(thread_id)
@@ -531,10 +489,7 @@ class AppLogger() :
         file_path = os.path.join(self.openai_threads_folder, thread_id + ".json")
         try:
             os.remove(file_path)
-            if self.use_streamlit:  
-                self.st.success(f"Thread data for thread id: {thread_id} has been deleted.")
-            else:
-                print(f"Thread data for thread id: {thread_id} has been deleted.")
+            print(f"Thread data for thread id: {thread_id} has been deleted.")
         except FileNotFoundError:
             print(f"Thread log for thread id: {thread_id} does not exist.")
         except Exception as e:
@@ -590,160 +545,3 @@ class AppLogger() :
         except Exception as e:
             print(f"Error loading CSV: {str(e)}")
             return pd.DataFrame()
-
-    def streamlit_batches_status(self):
-        self.st.header("Batch Processing Status")
-        
-        csv_path = os.path.join(self.tool_config['shared_folder'], 'batches_summary.csv')
-        
-        # Load the CSV file
-        batches_df = self.load_batches_summary(csv_path)
-        if  self.st.sidebar.button("update batch list", use_container_width=True):
-            batches_df = self.load_batches_summary(csv_path)
-        
-        if batches_df.empty:
-            self.st.warning("No batch data available.")
-            return
-        
-        batches_df = batches_df[batches_df['user_id'] == self.user_id]
-        # Display recap of batches in the pipeline
-        self.st.subheader("Batches Recap")
-        total_batches = len(batches_df)
-        completed_batches = len(batches_df[batches_df['status'] == 'COMPLETED'])
-        pending_batches = len(batches_df[batches_df['status'] == 'PENDING'])
-        
-        col1, col2, col3 = self.st.columns(3)
-        col1.metric("Total Batches", total_batches)
-        col2.metric("Completed Batches", completed_batches)
-        col3.metric("Pending Batches", pending_batches)
-
-        # Display the DataFrame
-        self.st.subheader("Batches Data")
-        
-        columns_to_display = ['filename', 'status', 'batch_id', 'session_id', 'function']
-        
-        self.st.dataframe(batches_df[columns_to_display])
-
-        # Add a select box for completed batches
-        completed_batches = batches_df[batches_df['status'] == 'COMPLETED']
-        if not completed_batches.empty:
-            selected_filename = self.st.selectbox(
-                "Select a completed batch to download:",
-                options=completed_batches['filename'].tolist(),
-                #format_func=lambda x: f"{x} - {completed_batches[completed_batches['filename'] == x]['batch_id'].values[0]}"
-            )
-
-            if selected_filename:
-                selected_row = completed_batches[completed_batches['filename'] == selected_filename].iloc[0]
-                
-                # Construct the path to the output file
-                filename = f"processed_{selected_row['input_file']}"
-                
-                output_file_path = os.path.join(self.tool_config['logs_root_folder'], f"{self.user_id}","files", f"{selected_row['session_id']}", filename)
-
-
-                # Check if the output file exists
-                if os.path.isfile(output_file_path):
-                    with open(output_file_path, "rb") as file:
-                        self.st.download_button(
-                            label="Download Output File",
-                            data=file,
-                            file_name=filename,
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        )
-                else:
-                    self.st.warning("Output file not found for the selected batch.")
-        else:
-            self.st.info("No completed batches available for download.")
-
-class DataLoader:
-    """
-    Handles the loading of file into the application
-    """
-    def __init__(self, config_key: str, app_logger:AppLogger, use_streamlit=True):
-
-        self.configurations = {
-            "dataframe": {'extensions': ['csv', 'xls', 'xlsx'], 
-                          'handler': self._dataframe_handler, 
-                          'default':pd.DataFrame()},
-            "doc": {'extensions': ['pdf', 'docx', 'txt'], 
-                     'handler': self._doc_handler, 
-                     'default': "",
-                     'accept_multiple_file':True},
-            "audio": {'extensions': ['mp3','mp4', 'mpeg','mpga','m4a','wav','webm'], 
-                     'handler': None, 
-                     'default':""}
-        }
-        if use_streamlit:
-            self.st = import_streamlit()
-        if config_key not in self.configurations:
-            raise ValueError("Invalid configuration key.")
-        self.app_logger = app_logger
-        self.file_types = self.configurations[config_key]['extensions']
-        self.handler = self.configurations[config_key]['handler']
-        self.default = self.configurations[config_key]['default']
-        self.accept_multiple_files =  self.configurations[config_key].get('accept_multiple_file', False)
-        if use_streamlit:
-            uploaded_file = self.st.sidebar.file_uploader("Choose a file", type=self.file_types, accept_multiple_files=self.accept_multiple_files)
-        if uploaded_file:
-            self.user_file = self.load_user_file(uploaded_file)
-            self.app_logger.save_original_file(uploaded_file)
-            
-        else:
-            self.user_file = None
-            self.content = self.default
-            if use_streamlit:   
-                self.st.write ("## Upload a file using the widget in the sidebar to start")
-            
-    def _dataframe_handler(self, uploaded_file) -> pd.DataFrame:
-        try:
-            if uploaded_file.name.endswith('.csv'):
-                # Load CSV file
-                return pd.read_csv(uploaded_file)
-            elif uploaded_file.name.endswith(('.xls', '.xlsx')):
-                # Load Excel file with additional options for better datatype handling
-                return pd.read_excel(uploaded_file, engine='openpyxl', 
-                                     dtype=str)         # Load everything as strings initially
-        except Exception as e:
-            if self.use_streamlit:  
-                self.st.sidebar.error(f"Failed to load data: {e}")
-            else:
-                print(f"Failed to load data: {e}")
-            return self.default
-        
-    def _doc_handler(self, uploaded_files) -> str:
-
-        concatenated_text = ""
-        for uploaded_file in uploaded_files:
-            print (uploaded_file)
-            try:
-                # Check the file extension to determine handling method
-                if uploaded_file.name.endswith('.txt'):
-                    # If it's a text file, read directly
-                    text = uploaded_file.read().decode('utf-8')
-                else:
-                    # For other types, use textract
-                    temp_file_path = '/tmp/' + uploaded_file.name
-                    with open(temp_file_path, "wb") as f:
-                        FileLockManager(temp_file_path).secure_write(uploaded_file.getbuffer())
-
-                    # Extract text from the saved file using textract
-                    text = textract.process(temp_file_path).decode('utf-8')
-                
-                concatenated_text += text
-            except Exception as e:
-                if self.use_streamlit:
-                    self.st.sidebar.error(f"Failed to load document {uploaded_file.name}: {e}")
-                else:
-                    print(f"Failed to load document {uploaded_file.name}: {e}")
-                concatenated_text += self.default
-        
-        return concatenated_text
-
-
-
-    def load_user_file(self, uploaded_file):
-        if self.handler:
-            return self.handler(uploaded_file)
-        else:
-            return uploaded_file

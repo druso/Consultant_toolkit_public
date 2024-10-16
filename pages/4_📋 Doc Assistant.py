@@ -1,7 +1,8 @@
-from src.file_manager import DataLoader
+import logging
+logger = logging.getLogger(__name__)
 from src.external_tools import LlmManager
-from src.request_processor import DfRequestConstructor, TextEmbeddingsProcessors, SingleRequestConstructor
-from src.setup import page_setup, page_footer
+from src.streamlit_interface import DfRequestConstructor, TextEmbeddingsProcessors, SingleRequestConstructor
+from src.streamlit_setup  import page_setup, page_footer, DataLoader, configure_llm_streamlit
 import streamlit as st
 import pandas as pd
 
@@ -21,12 +22,14 @@ if 'doc_status' not in st.session_state:
 
 if st.session_state["authentication_status"]:
     app_logger = st.session_state["app_logger"]
+    credential_manager = st.session_state['credential_manager']
     data_loader = DataLoader("doc", app_logger)
 
 
     if data_loader.user_file:
         user_doc = data_loader.user_file
-        llm_manager = LlmManager("streamlit",app_logger)
+        llm_manager = LlmManager(app_logger,credential_manager)
+        llm_manager = configure_llm_streamlit(llm_manager, LlmManager, app_logger)
         st.write("1. First thing we need to chunk the text into more digestible bits")
         st.session_state['chunks_df'] = SingleRequestConstructor().text_chunker(user_doc, app_logger.file_name,st.session_state['chunks_df'],)
         if not st.session_state['chunks_df'].empty:   

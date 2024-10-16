@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger(__name__)
 import time
 import os
 import json
@@ -16,10 +18,10 @@ credential_manager = CredentialManager(tool_config, use_streamlit=False)
 
 
 def run_scheduler(frequency=tool_config['scheduler_frequency']):
-    print(f"{datetime.now()} - Cronjob: Scheduler started")
+    logger.info("Cronjob: Scheduler started")
     
     while True:
-        print(f"{datetime.now()} - Checking for new jobs")
+        logger.info("Checking for new jobs")
         pending_files = [f for f in os.listdir(batch_manager.batches_folder) if f.endswith("PENDING.json")]
 
         for file in pending_files:
