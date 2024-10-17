@@ -661,7 +661,13 @@ class OxyLabsManager():
         soup = BeautifulSoup(content["results"][0]["content"], 'html.parser')
 
         text_elements = [tag.get_text(strip=True) for tag in soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'])]
-        clean_content = "\n".join(text_elements)
+        finalized_content = "\n".join(text_elements)
+
+        clean_content = ''.join(char for char in finalized_content if ord(char) >= 32)
+        # Replace other problematic characters
+        clean_content = re.sub(r'[\000-\010]|[\013-\014]|[\016-\031]', '', clean_content)
+        # Replace em dash and en dash with regular dash
+        clean_content = clean_content.replace('—', '-').replace('–', '-')
 
         return clean_content
 
