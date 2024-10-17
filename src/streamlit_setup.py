@@ -15,6 +15,7 @@ def user_login():
     if st.session_state['tool_config'].get('require_login', False):
         user_config = load_config('users.yaml')
         if not user_config:
+            logger.error("Users configuration file not found. Please check users.yaml file")
             st.error("Users configuration file not found. Please check users.yaml file")
             st.stop()
 
@@ -66,7 +67,6 @@ def page_setup(page_config):
  
         if [service for service in st.session_state['credential_manager'].services_list if service['initialized'] == False]:
             st.warning("Some API keys are not set. Please go to **🔧 Settings & Recovery** from menu and provide them to use the full potential of the toolkit")
-        else:
             logger.warning("Warning: Some API keys are not set. May not be able to run all functions")
 
 
@@ -145,17 +145,13 @@ class DataLoader:
                 return pd.read_excel(uploaded_file, engine='openpyxl', 
                                      dtype=str)   
         except Exception as e:
-            if self.use_streamlit:  
-                self.st.sidebar.error(f"Failed to load data: {e}")
-            else:
-                print(f"Failed to load data: {e}")
+            st.sidebar.error(f"Failed to load data: {e}")
             return self.default
         
     def _doc_handler(self, uploaded_files) -> str:
 
         concatenated_text = ""
         for uploaded_file in uploaded_files:
-            print (uploaded_file)
             try:
                 if uploaded_file.name.endswith('.txt'):
                     text = uploaded_file.read().decode('utf-8')
@@ -169,7 +165,6 @@ class DataLoader:
                 concatenated_text += text
             except Exception as e:
                 st.sidebar.error(f"Failed to load document {uploaded_file.name}: {e}")
-                print(f"Failed to load document {uploaded_file.name}: {e}")
                 concatenated_text += self.default
         
         return concatenated_text

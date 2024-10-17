@@ -61,6 +61,57 @@ class FileLockManager:
         finally:
             self._release_lock()
 
+    def secure_rename(self, new_path):
+        """Rename the locked file to a new path safely."""
+        try:
+            self._acquire_lock()
+            os.rename(self.file_path, new_path)
+            logger.info(f"Renamed {self.file_path} to {new_path}")
+        except Exception as e:
+            logger.error(f"Error renaming file: {str(e)}")
+            raise
+        finally:
+            self._release_lock()
+
+    def secure_remove(self):
+        """Safely remove the file using a lock."""
+        self._acquire_lock()
+        try:
+            if os.path.exists(self.file_path):
+                os.remove(self.file_path)
+                logger.info(f"Removed {self.file_path}")
+            else:
+                logger.warning(f"File {self.file_path} does not exist")
+        except Exception as e:
+            logger.error(f"Error removing file: {str(e)}")
+            raise
+        finally:
+            self._release_lock()    
+    
+    def secure_move(self, new_path):
+        """Safely move the file to a new location using a lock."""
+        self._acquire_lock()
+        try:
+            # Move the main file
+            shutil.move(self.file_path, new_path)
+            logger.info(f"Moved {self.file_path} to {new_path}")
+
+            # Handle the lock file
+            new_lock_file = new_path + ".lock"
+            if os.path.exists(self.lock_file):
+                os.remove(self.lock_file)
+                logger.info(f"Removed old lock file: {self.lock_file}")
+
+            # Update the file_path and lock_file attributes
+            self.file_path = new_path
+            self.lock_file = new_lock_file
+
+        except Exception as e:
+            logger.error(f"Error moving file: {str(e)}")
+            raise
+        finally:
+            self._release_lock()
+
 
 class DataFrameProcessor:
     def __init__(self, df: pd.DataFrame,):
@@ -293,8 +344,10 @@ class AppLogger() :
         self.session_id = datetime.now().strftime('%y%m%d') +"_"+ str(uuid.uuid4())[:6]
         self.file_name = "default"
         logs_root_folder = os.getenv('LOGS_ROOT_FOLDER') or tool_config.get('logs_root_folder') or "logs"
+        shared_folder = os.getenv('SHARED_FOLDER') or tool_config.get('shared_folder') or "shared"
         self.tool_config = tool_config
         self.logs_folder = f"{logs_root_folder}/{user_id}"
+        self.shared_folder = f"{shared_folder}/{user_id}"
         self.log_types = ["files", "requests", "openai_threads"]
         
         for log_type in self.log_types:
@@ -359,6 +412,18 @@ class AppLogger() :
         folder = self.logs_folder
         shutil.rmtree(folder, ignore_errors=True)
         os.makedirs(folder, exist_ok=True)
+
+    def purge_shared_files(self):
+        folder = self.shared_folder
+        for root, _, files in os.walk(folder):
+            for file in files:
+                if file.startswith(self.user_id):
+                    file_path = os.path.join(root, file)
+                    file_lock = FileLockManager(file_path)
+                    try:
+                        file_lock.secure_remove()
+                    except Exception as e:
+                        logger.error(f"Error removing file {file_path}: {str(e)}")
 
     def to_excel(self, df: pd.DataFrame) -> bytes:
  
@@ -533,8 +598,15 @@ class AppLogger() :
 
 
 
-    def load_batches_summary(self, csv_path):
+    def load_batches_summary(self):
         """Load the batches summary CSV file using FileLockManager."""
+        csv_path = os.path.join(
+            self.tool_config['shared_folder'],
+            'batches',
+            self.tool_config['shared_summaries_folder'], 
+            f'{self.user_id}_batches_summary.csv'
+            )
+        
         lock_manager = FileLockManager(csv_path)
         try:
             csv_content = lock_manager.secure_read()

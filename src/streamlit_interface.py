@@ -1,5 +1,3 @@
-import logging
-logger = logging.getLogger(__name__)
 from src.prompts import sysmsg_keyword_categorizer,sysmsg_review_analyst_template, sysmsg_summarizer_template
 
 
@@ -84,7 +82,6 @@ class DfRequestConstructor():
                 progress_bar = st.progress(0, text="Preparing the operation")
                 df=self.df_processor.processed_df
                 total_to_process = batch_size if batch_size > 0 else len(df[df[response_column].isna()].index)
-                print("start")
                 try:
                     for progress in self.batches_constructor.df_batches_handler(
                         func=function, 
@@ -102,11 +99,9 @@ class DfRequestConstructor():
                             st.toast("Processing complete. Check the results below")
                 except Exception as e:
                     st.error(f"An error occurred: {str(e)}")
-                    logging.error(f"An error occurred: {str(e)}")
 
             #############FULL FILE RUN################      
             if st.button(f"Run {function_name} on the whole file", use_container_width=True, disabled=waiting_input):
-                print("start")
 
                 self.app_logger.post_scheduler_request(
                                                 df=self.df_processor.processed_df,
@@ -683,7 +678,7 @@ class assistant_interface():
                                             with st.status("Results", state="complete"):
                                                 st.code(code_output)
                                     except Exception as e:
-                                        print(f"No outputs from code interpreter: {e}")
+                                        pass
                                     finally:
                                         code_input_expander.update(label="Code", state="complete", expanded=False)
                                 else:
@@ -743,13 +738,10 @@ def dataframe_streamlit_handler(df_processor:DataFrameProcessor):
 
 def streamlit_batches_status(app_logger):
     st.header("Batch Processing Status")
-    
-    csv_path = os.path.join(app_logger.tool_config['shared_folder'], 'batches_summary.csv')
-    
     # Load the CSV file
-    batches_df = app_logger.load_batches_summary(csv_path)
+    batches_df = app_logger.load_batches_summary()
     if  st.sidebar.button("update batch list", use_container_width=True):
-        batches_df = app_logger.load_batches_summary(csv_path)
+        batches_df = app_logger.load_batches_summary()
     
     if batches_df.empty:
         st.warning("No batch data available.")

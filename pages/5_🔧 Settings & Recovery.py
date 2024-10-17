@@ -87,14 +87,15 @@ if st.session_state["authentication_status"]:
         )
     
     st.divider()
-    purge_logs_password = st.session_state['tool_config'].get('purge_logs_password')
-    password = st.text_input('Provide the password to purge the logs folder', type='password') if purge_logs_password else None
+    st.title("Purge user data")#########################################################################################
+    purge_user_data_password = st.session_state['tool_config'].get('purge_user_data_password')
+    password = st.text_input('Provide the password to purge the logs folder', type='password') if purge_user_data_password else None
 
-    if st.button('Purge the logs folder', use_container_width=True):
-        if not purge_logs_password or password == purge_logs_password:
+    if st.button('Purge user data', use_container_width=True):
+        if not purge_user_data_password or password == purge_user_data_password:
             app_logger.purge_logs_folder()
             st.success('Logs folder purged')
-        elif purge_logs_password:
+        elif purge_user_data_password:
             st.error('Input the right password, or ask the webmaster')
 
 elif st.session_state["authentication_status"] is False:

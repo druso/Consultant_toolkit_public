@@ -17,20 +17,25 @@ credential_manager = CredentialManager(tool_config, use_streamlit=False)
 
 
 
-def run_scheduler(frequency=tool_config['scheduler_frequency']):
-    logger.info("Cronjob: Scheduler started")
+def run_scheduler(frequency=tool_config['scheduler_frequency'], process_oldest_first=True):
+    logger.info("Cronjob: Scheduler started, looking for pending jobs")
     
     while True:
-        logger.info("Checking for new jobs")
-        pending_files = [f for f in os.listdir(batch_manager.batches_folder) if f.endswith("PENDING.json")]
+        pending_files_paths = [f for f in os.listdir(batch_manager.batches_folder) if f.endswith("PENDING.json")]
+        if process_oldest_first:
+            pending_files_paths.reverse()
 
-        for file in pending_files:
-            job_payload = batch_manager.load_payload(file)
+        if not pending_files_paths:
+            logger.info(f"No pending jobs found.")
+
+
+        for file_path in pending_files_paths:
+            job_payload = batch_manager.load_payload(file_path)
             if job_payload:
-                batch_manager.execute_job(job_payload, credential_manager)
-                batch_manager.rename_completed_payload(file)
-            
-        batch_manager.update_batches_summary()
+                logger.info(f"Found new file to process: {file_path}")
+                batch_manager.execute_job(job_payload,file_path, credential_manager)
+
+        logger.info(f"Will sleep for {frequency} seconds, good night")
         time.sleep(frequency)
 
 

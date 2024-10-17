@@ -43,9 +43,9 @@ def load_config(file_name, handle_env_vars=True):
 
 def scheduler_setup():
     tool_config = load_config('tool_configs.yaml')
-    folder = tool_config.get('shared_folder', 'shared')
-    setup_logging()  
+    folder = tool_config.get('shared_folder', 'shared')  
     os.makedirs(folder, exist_ok=True)
+    setup_logging()
     print ("scheduler started")
     return tool_config   
 
