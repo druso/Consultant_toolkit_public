@@ -17,12 +17,12 @@ credential_manager = CredentialManager(tool_config, use_streamlit=False)
 
 
 
-def run_scheduler(frequency=tool_config['scheduler_frequency'], process_oldest_first=True):
+def run_scheduler(frequency=tool_config['scheduler_frequency'], process_newest_first=False):
     logger.info("Cronjob: Scheduler started, looking for pending jobs")
     
     while True:
         pending_files_paths = [f for f in os.listdir(batch_manager.batches_folder) if f.endswith("PENDING.json")]
-        if process_oldest_first:
+        if process_newest_first:
             pending_files_paths.reverse()
 
         if not pending_files_paths:

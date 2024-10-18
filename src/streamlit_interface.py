@@ -60,15 +60,15 @@ class DfRequestConstructor():
                                     )
 
         else:
-            default_value='Select a column...'
+            default_query_value='Select a column...'
             query_column = st.selectbox(f"Select columns use as {query_name}", 
-                                        options=[default_value] + self.df_processor.processed_df.columns.tolist(), help="This is the input colum. Each row will be processed through the function")
+                                        options=[default_query_value] + self.df_processor.processed_df.columns.tolist(), help="This is the input colum. Each row will be processed through the function")
             batch_size = st.number_input(f"{function_name} requests test batch size",min_value=1,max_value=10,step=1,value=3, help="Here you set how many rows to process with a click.")
             response_column = st.text_input(f"{response_name} Column Name",response_name, help="The response from the function will be stored in a column with the name you provide here")
             if query_column == response_column:
                 st.warning("*You should select a different column for the response than what you're using as the input or you'll get into a paradox*")
                 waiting_input=True
-            elif query_column == default_value:
+            elif query_column == default_query_value:
                 st.warning("*No column selected. Please choose a column.*")
                 waiting_input=True
             elif not function_ready:
@@ -102,15 +102,17 @@ class DfRequestConstructor():
 
             #############FULL FILE RUN################      
             if st.button(f"Run {function_name} on the whole file", use_container_width=True, disabled=waiting_input):
-
-                self.app_logger.post_scheduler_request(
-                                                df=self.df_processor.processed_df,
-                                                function=function, 
-                                                query_column=query_column, 
-                                                response_column=response_column, 
-                                                kwargs=kwargs
-                                                )
-                st.toast("Request sent to the scheduler", icon='🚀')
+                if query_column == default_query_value:
+                    st.warning("*No column selected. Please choose a column.*")
+                else:
+                    self.app_logger.post_scheduler_request(
+                                                    df=self.df_processor.processed_df,
+                                                    function=function, 
+                                                    query_column=query_column, 
+                                                    response_column=response_column, 
+                                                    kwargs=kwargs
+                                                    )
+                    st.toast("Request sent to the scheduler", icon='🚀')
     
     def llm_request_single_column(self, llm_manager, config_package=None):
         if config_package:

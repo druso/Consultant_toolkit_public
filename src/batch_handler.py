@@ -12,7 +12,6 @@ import re
 
 class DfBatchesConstructor():
     def __init__(self, df_processor:DataFrameProcessor, app_logger:AppLogger):
-
         self.df_processor = df_processor
         self.app_logger = app_logger
 
@@ -37,10 +36,6 @@ class DfBatchesConstructor():
                 f"Please select a column"
             )
         
-
-        
-
-
         if response_column not in df.columns:
             df[response_column] = pd.NA
 
@@ -111,34 +106,6 @@ class BatchManager:
         file_path = os.path.join(self.batches_folder, payload_filename)
         file_content = FileLockManager(file_path).secure_read()
         return json.loads(file_content)
-
-    def update_payload_status(self, file_path, status):
-        if isinstance(status, int):
-            new_status = f"PROCESSING_{status}"
-        elif status.upper() == "COMPLETED":
-            new_status = "COMPLETED"
-        else:
-            raise ValueError(f"Invalid status: {status}. Must be an integer or 'COMPLETED'.")
-        
-        # Get the directory and filename separately
-        dir_path, filename = os.path.split(file_path)
-        
-        # Remove any existing status from the filename
-        base_name = re.sub(r'(_(PENDING|PROCESSING_\d+|COMPLETED))?\.json$', '', filename)
-        
-        new_filename = f"{base_name}_{new_status}.json"
-        new_path = os.path.join(dir_path, new_filename)
-        file_lock = FileLockManager(file_path)
-
-        try:
-            file_lock.secure_rename(new_path)
-            logger.info(f"Updated {file_path} to {new_filename}")
-            return new_path  # Return the full path, not just the filename
-        
-        except Exception as e:
-            logger.error(f"Error updating payload status: {str(e)}")
-            return file_path
-
 
     def dataframe_loader(self, filepath) -> pd.DataFrame:
         try:
@@ -212,6 +179,32 @@ class BatchManager:
         except Exception as e:
             logging.error(f"An error occurred: {str(e)}")
 
+    def update_payload_status(self, file_path, status):
+        if isinstance(status, int):
+            new_status = f"PROCESSING_{status}"
+        elif status.upper() == "COMPLETED":
+            new_status = "COMPLETED"
+        else:
+            raise ValueError(f"Invalid status: {status}. Must be an integer or 'COMPLETED'.")
+        
+        # Get the directory and filename separately
+        dir_path, filename = os.path.split(file_path)
+        
+        # Remove any existing status from the filename
+        base_name = re.sub(r'(_(PENDING|PROCESSING_\d+|COMPLETED))?\.json$', '', filename)
+        
+        new_filename = f"{base_name}_{new_status}.json"
+        new_path = os.path.join(dir_path, new_filename)
+        file_lock = FileLockManager(file_path)
+
+        try:
+            file_lock.secure_rename(new_path)
+            logger.info(f"Updated {file_path} to {new_filename}")
+            return new_path  # Return the full path, not just the filename
+        
+        except Exception as e:
+            logger.error(f"Error updating payload status: {str(e)}")
+            return file_path
 
     def finalize_job(self, payload_filename, job_payload):
         """
@@ -234,7 +227,14 @@ class BatchManager:
                         flattened_data.update({f"{key}_{sub_key}": sub_value for sub_key, sub_value in value.items()})
                     else:
                         flattened_data[key] = value
+            self.update_batch_summary(flattened_data, job_payload)
+            self.finalize_payload(payload_filename)
 
+        except Exception as e:
+            logger.error(f"Failed to finalize job {payload_filename}: {str(e)}")
+
+
+    def update_batch_summary(self, flattened_data, job_payload):
             # Create a DataFrame from the flattened data
             new_df = pd.DataFrame([flattened_data])
             columns_to_save = [col for col in new_df.columns if not col.startswith('kwargs_')]
@@ -262,6 +262,8 @@ class BatchManager:
                     logger.error(f"Error updating existing CSV: {str(e)}")
                     raise
 
+
+    def finalize_payload(self, payload_filename):
             payload_path = os.path.join(
                 self.batches_folder,
                 payload_filename
@@ -280,6 +282,3 @@ class BatchManager:
 
             # Update the payload status to COMPLETED
             self.update_payload_status(final_payload_path, "COMPLETED")
-
-        except Exception as e:
-            logger.error(f"Failed to finalize job {payload_filename}: {str(e)}")
