@@ -137,17 +137,18 @@ class FileLockManager:
             except Exception as e:
                 logger.err
 
-    def secure_csv_update(self, update_function):
+    def secure_csv_update(self, update_data, update_function, **kwargs):
         """
         Securely update a CSV file using a provided update function.
 
         Args:
-            update_function (callable): A function that takes a DataFrame as input
+            update_data (dict or pd.DataFrame): Data to update or add.
+            update_function (callable): A function that takes a DataFrame and update_data as input
                                         and returns an updated DataFrame.
+            **kwargs: Additional arguments to pass to the update_function.
         """
         with self.locked():
             try:
-                # Read existing CSV or create empty DataFrame if file doesn't exist
                 try:
                     with open(self.file_path, "r", encoding='utf-8') as file:
                         df = pd.read_csv(file)
@@ -157,7 +158,7 @@ class FileLockManager:
                     logger.debug("CSV file not found. Created a new empty DataFrame.")
 
                 # Apply the update function
-                updated_df = update_function(df)
+                updated_df = update_function(df, update_data, **kwargs)
                 logger.debug(f"DataFrame updated. Now has {len(updated_df)} rows.")
 
                 # Write the updated DataFrame back to CSV
@@ -610,7 +611,7 @@ class BatchRequestLogger(FolderSetupMixin):
             user_id=self.user_id,
             session_id=self.session_id,
             function=function_name,
-            batch_size=10,#################################################################################################################
+            batch_size=0,
             input_file=input_file,
             query_column=query_column,
             response_column=response_column,
@@ -618,10 +619,11 @@ class BatchRequestLogger(FolderSetupMixin):
         )
 
         folder = self.tool_config.get('shared_folder', 'shared')
-        with open(f"{folder}/batches/{self.user_id}_{batch_id}_PENDING.json", "w") as f:
+        payload_filename=f"{self.user_id}_{batch_id}_PENDING.json"
+        with open(f"{folder}/batches/{payload_filename}", "w") as f:
             json.dump(payload.to_dict(), f, indent=4)
             print(f"saved batch request at {folder}/batches/{batch_id}_PENDING.json")
-        self.batch_summary_logger.update_batch_summary(payload, status="PENDING")
+        self.batch_summary_logger.update_batch_summary(payload, status="PENDING", filename=payload_filename)
 
 
 
@@ -629,7 +631,6 @@ class BatchRequestLogger(FolderSetupMixin):
         """Load the batches summary CSV file using FileLockManager."""
         csv_path = os.path.join(
             self.tool_config['shared_folder'],
-            'batches',
             self.tool_config['shared_summaries_folder'], 
             f'{self.user_id}_batches_summary.csv'
             )
@@ -650,27 +651,47 @@ class BatchSummaryLogger(FolderSetupMixin):
     def __init__(self, tool_config):
         self.setup_shared_folders(tool_config)
 
-    def update_batch_summary(self, payload: BatchRequestPayload, status="PENDING", filename =None, total_rows=None):
+    def update_batch_summary(self, payload: BatchRequestPayload, status="PENDING", filename=None, total_rows=None):
         summary_payload = BatchSummaryPayload.from_request_payload(payload, status)
-        summary_payload.schedule_time = datetime.now().isoformat()
-        if status == "WIP":
+
+        update_fields = ['status']
+        if status == "PENDING":
+            summary_payload.schedule_time = datetime.now().isoformat()
+            summary_payload.filename = filename
+            update_fields.extend(['schedule_time', 'filename'])
+        elif status == "WIP":
             summary_payload.start_time = datetime.now().isoformat()
             summary_payload.batch_size = total_rows
-        if status == "COMPLETED":
+            update_fields.extend(['start_time', 'batch_size'])
+        elif status == "COMPLETED":
             summary_payload.end_time = datetime.now().isoformat()
             summary_payload.filename = filename
-        summary_payload.status = status
+            update_fields.extend(['end_time', 'filename'])
 
         csv_path = os.path.join(
             self.batches_summary_folder,
             f'{payload.user_id}_batches_summary.csv'
         )
-        def update_function(df):
-            new_row = pd.DataFrame([summary_payload.to_dict()])
-            return pd.concat([df, new_row], ignore_index=True)
-        
+
+        def update_function(df, update_data, update_fields):
+            new_row = pd.DataFrame([update_data])
+            if 'batch_id' in df.columns and df['batch_id'].isin([update_data['batch_id']]).any():
+                # Update only specific fields for existing rows
+                for field in update_fields:
+                    df.loc[df['batch_id'] == update_data['batch_id'], field] = new_row[field].values[0]
+                logger.debug(f"Updated existing batch_id {update_data['batch_id']} in summary CSV.")
+            else:
+                # Append new row if it doesn't exist
+                df = pd.concat([df, new_row], ignore_index=True)
+                logger.debug(f"Appended new batch_id {update_data['batch_id']} to summary CSV.")
+            return df
+
         lock_manager = FileLockManager(csv_path)
-        lock_manager.secure_csv_update(update_function)
+        lock_manager.secure_csv_update(
+            update_data=summary_payload.to_dict(),
+            update_function=update_function,
+            update_fields=update_fields
+        )
 
         logger.info(f"Updated CSV summary for user {payload.user_id}")
 

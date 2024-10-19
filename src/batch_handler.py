@@ -63,7 +63,7 @@ class DfBatchesConstructor():
 
         processed_count = 0
         start_time = time.time()
-
+        progress_saved = True
         for idx in unprocessed_indices:
             if batch_size > 0 and processed_count >= batch_size:
                 logger.info(f"Reached batch size limit of {batch_size}")
@@ -91,17 +91,27 @@ class DfBatchesConstructor():
 
             processed_count += 1
 
+            progress_saved = False
             if processed_count % save_interval == 0: 
                 save_path = self.session_logger.log_excel(df, version="in_progress", return_path=True )
+                progress_saved = True
                 logger.info(f"Saved progress at {processed_count} rows at {save_path}")
 
-            yield processed_count
+            yield {
+                "processed_count": processed_count,
+                "progress_saved": False,
+                "df": None
+            }
 
         save_path = self.session_logger.log_excel(df, version="processed", return_path=True)
         end_time = time.time()
         logger.info(f"Processing complete! Processed {processed_count} rows in {end_time - start_time:.2f} seconds. Saved at {save_path}")
 
-        yield df
+        yield {
+                "processed_count": processed_count,
+                "progress_saved": progress_saved,
+                "df": df
+            }
 
 
 
@@ -184,26 +194,18 @@ class BatchManager(FolderSetupMixin):
                 query_column=job_payload.query_column, 
                 **job_payload.kwargs
             ):
-                if isinstance(progress, int):
-                    current_percentage = (progress / total_rows) * 100
-                    if current_percentage - last_percentage >= 5:
-                        status = int(current_percentage)
-                        current_payload_filename = self.update_payload_status(current_payload_filename, status)###########
-                        logging.info(f"updated processing status at {current_payload_filename}")
-                        last_percentage = current_percentage
-                elif isinstance(progress, pd.DataFrame):
+                if progress["df"] is None and progress["progress_saved"]:
+                    current_percentage = (progress["processed_count"] / total_rows) * 100
+                    status = int(current_percentage)
+                    logging.info(f"updating processing status at {current_payload_filename}")
+                    current_payload_filename = self.update_payload_status(current_payload_filename, status)
+                    logging.info(f"updated processing status at {current_payload_filename}")
+
+                elif progress["df"] is not None:
+                    logging.info(f"closing processing status at {current_payload_filename}")
                     completed_filename = self.update_payload_status(current_payload_filename, "COMPLETED")
                     self.batch_summary_logger.update_batch_summary(job_payload, status="COMPLETED", filename=completed_filename)
                     self.archive_payload(completed_filename)
-
-
-
-
-                    """dir_path, current_payload_filename = os.path.split(current_payload_filename)
-                    processed_filename = "processed_" + job_payload.input_file
-                    self.batch_summary_logger.update_batch_summary(job_payload, status="COMPLETED", filename=processed_filename)
-                    current_payload_filename = self.update_payload_status(current_payload_filename, "COMPLETED")
-                    self.archive_payload(current_payload_filename)"""
 
                     logging.info(f"Ended processing executing function")
         except Exception as e:

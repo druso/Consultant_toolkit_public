@@ -91,11 +91,12 @@ class DfRequestConstructor():
                         batch_size=batch_size, 
                         **kwargs
                     ):
-                        if isinstance(progress, int):
-                            if progress > batch_size:
-                                progress=batch_size
-                            progress_bar.progress(int(progress / batch_size * 100), text=f"Processing... {progress}/{total_to_process}")
-                        elif isinstance(progress, pd.DataFrame):
+                        if progress["df"] is None:
+                            processed_count =progress["processed_count"]
+                            if processed_count > batch_size:
+                                processed_count=batch_size
+                            progress_bar.progress(int(processed_count / batch_size * 100), text=f"Processing... {processed_count}/{total_to_process}")
+                        else:
                             progress_bar.empty()
                             st.toast("Processing complete. Check the results below")
                 except Exception as e:
@@ -729,7 +730,7 @@ def dataframe_streamlit_handler(df_processor:DataFrameProcessor):
 
         return df_processor
 
-def streamlit_batches_status(batch_request_logger):
+def streamlit_batches_status(batch_request_logger:BatchRequestLogger):
     st.header("Batch Processing Status")
     # Load the CSV file
     batches_df = batch_request_logger.load_batches_summary()
@@ -779,7 +780,7 @@ def streamlit_batches_status(batch_request_logger):
                 f"{batch_request_logger.user_id}",
                 "files", 
                 f"{selected_row['session_id']}", 
-                filename)###########################################################THIS IS LESS THAN IDEAL
+                filename)###########################################################HANDLING PATH NAME LIKE THIS IS LESS THAN IDEAL
 
 
             # Check if the output file exists
