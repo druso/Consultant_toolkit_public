@@ -7,7 +7,7 @@ import streamlit as st
 import streamlit_authenticator as stauth
 from streamlit_authenticator.utilities.hasher import Hasher
 from src.setup import load_config, setup_logging, CredentialManager
-from src.file_manager import AppLogger, FileLockManager
+from src.file_manager import SessionLogger, FileLockManager
 import textract
 
 def user_login():
@@ -70,10 +70,10 @@ def page_setup(page_config):
             logger.warning("Warning: Some API keys are not set. May not be able to run all functions")
 
 
-        if "app_logger" not in st.session_state:
-            st.session_state["app_logger"] = AppLogger(st.session_state['username'],st.session_state['tool_config'] )
+        if "session_logger" not in st.session_state:
+            st.session_state["session_logger"] = SessionLogger(st.session_state['username'],st.session_state['tool_config'] )
             
-        st.sidebar.write(f"Your session id: {st.session_state['app_logger'].session_id}")  
+        st.sidebar.write(f"Your session id: {st.session_state['session_logger'].session_id}")  
 
 def page_footer():
     st.divider()
@@ -84,7 +84,7 @@ def page_footer():
 
 
 
-def configure_llm_streamlit(llm_manager, LLMManager, app_logger):
+def configure_llm_streamlit(llm_manager, LLMManager, session_logger):
 
     # Initialize a temporary LlmManager to get available configurations
     configurations = llm_manager.configurations
@@ -95,7 +95,7 @@ def configure_llm_streamlit(llm_manager, LLMManager, app_logger):
     llm_temp = st.sidebar.slider("Set Temperature", min_value=0.0, max_value=2.0, value=0.3, step=0.1)
 
     return LLMManager(   
-        app_logger=app_logger,
+        session_logger=session_logger,
         credential_manager=st.session_state['credential_manager'],
         config_key= config_key,
         llm_temp= llm_temp,)
@@ -104,7 +104,7 @@ class DataLoader:
     """
     Handles the loading of file into the application
     """
-    def __init__(self, config_key: str, app_logger: AppLogger):
+    def __init__(self, config_key: str, session_logger: SessionLogger):
 
         self.configurations = {
             "dataframe": {'extensions': ['csv', 'xls', 'xlsx'], 
@@ -121,7 +121,7 @@ class DataLoader:
 
         if config_key not in self.configurations:
             raise ValueError("Invalid configuration key.")
-        self.app_logger = app_logger
+        self.session_logger = session_logger
         self.file_types = self.configurations[config_key]['extensions']
         self.handler = self.configurations[config_key]['handler']
         self.default = self.configurations[config_key]['default']
@@ -129,7 +129,7 @@ class DataLoader:
         uploaded_file = st.sidebar.file_uploader("Choose a file", type=self.file_types, accept_multiple_files=self.accept_multiple_files)
         if uploaded_file:
             self.user_file = self.load_user_file(uploaded_file)
-            self.app_logger.save_original_file(uploaded_file)
+            self.session_logger.save_original_file(uploaded_file)
             
         else:
             self.user_file = None

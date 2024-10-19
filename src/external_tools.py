@@ -1,6 +1,6 @@
 import logging
 logger = logging.getLogger(__name__)
-from src.file_manager import AppLogger
+from src.file_manager import SessionLogger, OpenaiThreadLogger
 from src.setup import CredentialManager
 import openai
 import groq
@@ -28,10 +28,11 @@ class SkippableError(Exception):
 
 class openai_advanced_uses:
 
-    def __init__(self, app_logger: AppLogger, credential_manager=None):
-        self.app_logger = app_logger
-        self.save_request_log = app_logger.save_request_log
-        self.tool_configs = app_logger.tool_config
+    def __init__(self, session_logger: SessionLogger, credential_manager=None):
+        self.session_logger = session_logger
+        self.openai_thread_logger = OpenaiThreadLogger(session_logger.user_id, session_logger.tool_config)
+        self.save_request_log = session_logger.save_request_log
+        self.tool_configs = session_logger.tool_config
         self.credential_manager = credential_manager
         api_key = self.credential_manager.get_api_key('openai')
         if not api_key:
@@ -108,7 +109,7 @@ class openai_advanced_uses:
             content=assistant_setup_msg,
                 )
         
-        self.app_logger.log_openai_thread( 
+        self.openai_thread_logger.log_openai_thread( 
                     thread_id=thread.id, 
                     thread_name=thread_name, 
                     thread_file_ids= attachments, 
@@ -121,14 +122,14 @@ class openai_advanced_uses:
     
     def erase_thread(self,thread_id):
         self.openai_client.beta.threads.delete(thread_id)
-        self.app_logger.erase_thread_data(thread_id)
+        self.openai_thread_logger.erase_thread_data(thread_id)
 
 
     def reset_thread(self, thread_id):
-        thread_data = self.app_logger.get_thread_info(thread_id)
+        thread_data = self.openai_thread_logger.get_thread_info(thread_id)
         new_thread = self.setup_thread(thread_data['thread_name'], thread_data['file_ids'],thread_data['user_setup_msg'],thread_data['assistant_setup_msg'])
         self.openai_client.beta.threads.delete(thread_id)
-        self.app_logger.erase_thread_data(thread_id)
+        self.openai_thread_logger.erase_thread_data(thread_id)
         return new_thread.id
 
     #TEMPORARY USED
@@ -186,15 +187,15 @@ class LlmManager:
 
     def __init__(
         self,
-        app_logger: AppLogger,
+        session_logger: SessionLogger,
         credential_manager: CredentialManager,
         config_key: str = None,
         llm_temp: float = 0.3,
     ):
         
-        self.tool_configs = app_logger.tool_config
+        self.tool_configs = session_logger.tool_config
         self.llm_temp = llm_temp
-        self.save_request_log = app_logger.save_request_log
+        self.save_request_log = session_logger.save_request_log
         self.credential_manager = credential_manager
 
         self.configurations = {}
@@ -381,8 +382,8 @@ class LlmManager:
 
 
 class AudioTranscribe:
-    def __init__(self, app_logger, credential_manager):
-        self.save_request_log = app_logger.save_request_log
+    def __init__(self, session_logger, credential_manager):
+        self.save_request_log = session_logger.save_request_log
         self.credential_manager = credential_manager
         
 
@@ -402,9 +403,9 @@ class AudioTranscribe:
 
 
 class SerpApiManager:
-    def __init__(self,app_logger, credential_manager):
+    def __init__(self,session_logger, credential_manager):
         """Initialize the SerpAPIManager and set the url endpoints. API Key needs to be an env variable"""
-        self.save_request_log = app_logger.save_request_log
+        self.save_request_log = session_logger.save_request_log
         self.credential_manager = credential_manager
         self.base_url = "https://serpapi.com/search"
         pass
@@ -465,8 +466,8 @@ class SerpApiManager:
 
 class WebScraper:
 
-    def __init__(self,app_logger):
-        self.save_request_log = app_logger.save_request_log
+    def __init__(self,session_logger):
+        self.save_request_log = session_logger.save_request_log
     def url_simple_extract(self, url):
         try:
             response = requests.get(url)
@@ -491,9 +492,9 @@ class WebScraper:
             return "Crawling failed"
     
 class OxyLabsManager():
-    def __init__(self,app_logger, credential_manager):
+    def __init__(self,session_logger, credential_manager):
         """Initialize the Oxylab Manager and set the url endpoints. API Key needs to be an env variable"""
-        self.save_request_log = app_logger.save_request_log
+        self.save_request_log = session_logger.save_request_log
         self.credential_manager = credential_manager
         self.base_url = "https://realtime.oxylabs.io/v1/queries"
         self.paginator_max_pages = 10

@@ -2,7 +2,7 @@ from src.prompts import sysmsg_keyword_categorizer,sysmsg_review_analyst_templat
 
 
 from src.external_tools import LlmManager, StopProcessingError, RetryableError, SkippableError, openai_advanced_uses
-from src.file_manager import DataFrameProcessor, AppLogger
+from src.file_manager import DataFrameProcessor, SessionLogger, OpenaiThreadLogger, BatchRequestLogger
 from src.batch_handler import DfBatchesConstructor
 import streamlit as st
 import pandas as pd
@@ -31,14 +31,15 @@ from openai.types.beta.threads.runs.code_interpreter_tool_call import (
 
 
 class DfRequestConstructor():
-    def __init__(self, df_processor:DataFrameProcessor, app_logger=None):
+    def __init__(self, df_processor:DataFrameProcessor, session_logger:SessionLogger=None):
         """
         Initialize the streamlit df request constructor
         """
 
         self.df_processor = df_processor
-        self.app_logger = app_logger
-        self.batches_constructor = DfBatchesConstructor(df_processor, app_logger)
+        self.session_logger = session_logger
+        self.batch_request_logger = BatchRequestLogger(session_logger.user_id, session_logger.session_id, session_logger.tool_config)
+        self.batches_constructor = DfBatchesConstructor(df_processor, session_logger)
 
         self.bulk_sys_templates = {
             "Custom Prompt": "",
@@ -105,8 +106,9 @@ class DfRequestConstructor():
                 if query_column == default_query_value:
                     st.warning("*No column selected. Please choose a column.*")
                 else:
-                    self.app_logger.post_scheduler_request(
+                    self.batch_request_logger.post_scheduler_request(
                                                     df=self.df_processor.processed_df,
+                                                    session_logger=self.session_logger,
                                                     function=function, 
                                                     query_column=query_column, 
                                                     response_column=response_column, 
@@ -272,7 +274,7 @@ class DfRequestConstructor():
                                             options=available_columns,
                                             help="The column where you have structured content that needs to be unrolled")
             if st.button("expand column objects"):
-                self.app_logger.log_excel(self.df_processor.processed_df,version="before_unrolling")
+                self.session_logger.log_excel(self.df_processor.processed_df,version="before_unrolling")
                 self.df_processor.unroll_json(expander_msg_column)
 
 
@@ -488,7 +490,7 @@ class TextEmbeddingsProcessors():
 
 class openai_thread_setup():
     def __init__(self, openai_advanced_uses:openai_advanced_uses):
-        self.app_logger = st.session_state["app_logger"]
+        self.session_logger = st.session_state["session_logger"]
         self.openai_advanced_uses = openai_advanced_uses
 
     def __assistant_setup_msg_generator(self, df: pd.DataFrame) -> str:
@@ -504,7 +506,7 @@ class openai_thread_setup():
     def streamlit_interface(self, df):
                 
         st.write("### Assistant Setup")
-        thread_name = st.text_input("Thread name",self.app_logger.file_name,max_chars=30,help="This is how you can later select the thread in **🤖My Assistants**" )
+        thread_name = st.text_input("Thread name",self.session_logger.file_name,max_chars=30,help="This is how you can later select the thread in **🤖My Assistants**" )
         
         goals_example="The objective is to uncover how your target audience talks about competing products and brands, revealing their pain points, desires, and preferences. This insight will highlight opportunities for enhancing our product development and refining your communication strategy to better resonate with potential customers."
         goals=st.text_area("Goal of the analysis", goals_example, help="This will help the assistant understanding the broad scope of the analysis", height=200)
@@ -517,7 +519,7 @@ class openai_thread_setup():
         if st.button("Create Thread"):
             #Save and upload the file
             with st.spinner("Uploading the file..."):
-                file_path = self.app_logger.log_excel(df,"assistant", True)
+                file_path = self.session_logger.log_excel(df,"assistant", True)
                 uploaded_file = self.openai_advanced_uses.openai_upload_file(file_path, "assistants")
                 file_id = uploaded_file.id
                 assistant_setup_msg = self.__assistant_setup_msg_generator(df)
@@ -528,12 +530,10 @@ class openai_thread_setup():
                 
             st.write(f"Thread {thread_name} was set up correctly, you can now use it in the **🤖My Assistants** tab")
 
-
-
-
 class assistant_interface():
     def __init__(self, openai_advanced_uses:openai_advanced_uses):
-        self.app_logger = st.session_state["app_logger"]
+        self.session_logger = st.session_state["session_logger"]
+        self.openai_thread_logger = OpenaiThreadLogger(self.session_logger.user_id, self.session_logger.tool_config)
         self.openai_advanced_uses = openai_advanced_uses
         self.unavailable = False
 
@@ -558,11 +558,11 @@ class assistant_interface():
 
 
     def setup_thread(self):
-        thread_ids = self.app_logger.list_openai_threads()
+        thread_ids = self.openai_thread_logger.list_openai_threads()
         if thread_ids:
             selected_thread = st.sidebar.selectbox("Select thread", [name for _, name in thread_ids])
             self.thread_id = next(id for id, name in thread_ids if name == selected_thread)
-            st.session_state['messages'] = self.app_logger.get_thread_history(self.thread_id)
+            st.session_state['messages'] = self.openai_thread_logger.get_thread_history(self.thread_id)
             self.starting_message = f"Ask anything to the thread {selected_thread}"
             self.unavailable = False
         else:
@@ -659,9 +659,9 @@ class assistant_interface():
                                             for output in code_interpreter.outputs:
                                                 image_file_id = output.image.file_id
                                                 image_data = self.openai_advanced_uses.openai_download_file(image_file_id)
-                                                image_folder = f"{self.app_logger.openai_threads_folder}/{self.thread_id}"
+                                                image_folder = f"{self.session_logger.openai_threads_folder}/{self.thread_id}"
                                                 os.makedirs(image_folder, exist_ok=True)
-                                                image_path = f"{self.app_logger.openai_threads_folder}/{self.thread_id}/{image_file_id}.png"
+                                                image_path = f"{self.session_logger.openai_threads_folder}/{self.thread_id}/{image_file_id}.png"
                                                 with open(image_path, "wb") as file:
                                                     file.write(image_data)
 
@@ -700,19 +700,11 @@ class assistant_interface():
                             assistant_text_box.markdown(last_output["content"])
                 
             st.session_state['messages'].append({"role": "assistant", "items": assistant_output})
-            self.app_logger.update_thread_history(st.session_state['messages'],self.thread_id)
-
-
-
-
-
-
-
+            self.openai_thread_logger.update_thread_history(st.session_state['messages'],self.thread_id)
 
 def sync_streamlit_processed_df(df_processor:DataFrameProcessor):
     st.session_state['processed_df'] = df_processor.processed_df
     st.session_state['available_columns'] = df_processor.processed_df.columns.tolist()
-
 
 def dataframe_streamlit_handler(df_processor:DataFrameProcessor):
         
@@ -729,27 +721,26 @@ def dataframe_streamlit_handler(df_processor:DataFrameProcessor):
 
         if st.sidebar.button('Restore Processing', use_container_width=True, 
                             help="Will restore the file to the originally uploaded file"):
-            st.session_state["app_logger"].reinitialize_session_id()
-            st.session_state["app_logger"].log_excel(df_processor.user_df, "original")
+            st.session_state["session_logger"].reinitialize_session_id()
+            st.session_state["session_logger"].log_excel(df_processor.user_df, "original")
             st.session_state['processed_df'] = df_processor.user_df.copy()
             st.session_state['available_columns'] = st.session_state['processed_df'].columns.tolist()
             df_processor.processed_df = st.session_state['processed_df']
 
         return df_processor
 
-
-def streamlit_batches_status(app_logger):
+def streamlit_batches_status(batch_request_logger):
     st.header("Batch Processing Status")
     # Load the CSV file
-    batches_df = app_logger.load_batches_summary()
+    batches_df = batch_request_logger.load_batches_summary()
     if  st.sidebar.button("update batch list", use_container_width=True):
-        batches_df = app_logger.load_batches_summary()
+        batches_df = batch_request_logger.load_batches_summary()
     
     if batches_df.empty:
         st.warning("No batch data available.")
         return
     
-    batches_df = batches_df[batches_df['user_id'] == app_logger.user_id]
+    batches_df = batches_df[batches_df['user_id'] == batch_request_logger.user_id]
     # Display recap of batches in the pipeline
     st.subheader("Batches Recap")
     total_batches = len(batches_df)
@@ -783,7 +774,12 @@ def streamlit_batches_status(app_logger):
             # Construct the path to the output file
             filename = f"processed_{selected_row['input_file']}"
             
-            output_file_path = os.path.join(app_logger.tool_config['logs_root_folder'], f"{app_logger.user_id}","files", f"{selected_row['session_id']}", filename)
+            output_file_path = os.path.join(
+                batch_request_logger.tool_config['logs_root_folder'], 
+                f"{batch_request_logger.user_id}",
+                "files", 
+                f"{selected_row['session_id']}", 
+                filename)###########################################################THIS IS LESS THAN IDEAL
 
 
             # Check if the output file exists

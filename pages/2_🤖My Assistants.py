@@ -13,10 +13,10 @@ page_setup(page_config)
 
 
 if st.session_state["authentication_status"]:
-    app_logger = st.session_state["app_logger"]
+    session_logger = st.session_state["session_logger"]
     credential_manager = st.session_state['credential_manager']
 
-    openai_assistant = openai_advanced_uses(app_logger, credential_manager)
+    openai_assistant = openai_advanced_uses(session_logger, credential_manager)
 
     assistant_interface(openai_assistant)
 

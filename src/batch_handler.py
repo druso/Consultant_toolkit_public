@@ -1,8 +1,21 @@
 import logging
 logger = logging.getLogger(__name__)
 
-from src.external_tools import LlmManager, OxyLabsManager, StopProcessingError, RetryableError, SkippableError
-from src.file_manager import DataFrameProcessor, FileLockManager, AppLogger
+from src.external_tools import( 
+    LlmManager, 
+    OxyLabsManager, 
+    StopProcessingError, 
+    RetryableError, 
+    SkippableError
+    )
+from src.file_manager import(
+    DataFrameProcessor,
+    FileLockManager, 
+    SessionLogger, 
+    FolderSetupMixin, 
+    BatchSummaryLogger
+    )
+from src.dataformats import BatchRequestPayload
 import pandas as pd
 import json
 import os
@@ -11,9 +24,9 @@ import re
 
 
 class DfBatchesConstructor():
-    def __init__(self, df_processor:DataFrameProcessor, app_logger:AppLogger):
+    def __init__(self, df_processor:DataFrameProcessor, session_logger:SessionLogger):
         self.df_processor = df_processor
-        self.app_logger = app_logger
+        self.session_logger = session_logger
 
     def df_batches_handler(self, 
                        func, 
@@ -78,13 +91,13 @@ class DfBatchesConstructor():
 
             processed_count += 1
 
-            if processed_count % save_interval == 0:
-                save_path = self.app_logger.log_excel(df, version="in_progress", return_path=True )
+            if processed_count % save_interval == 0: 
+                save_path = self.session_logger.log_excel(df, version="in_progress", return_path=True )
                 logger.info(f"Saved progress at {processed_count} rows at {save_path}")
 
             yield processed_count
 
-        save_path = self.app_logger.log_excel(df, version="processed", return_path=True)
+        save_path = self.session_logger.log_excel(df, version="processed", return_path=True)
         end_time = time.time()
         logger.info(f"Processing complete! Processed {processed_count} rows in {end_time - start_time:.2f} seconds. Saved at {save_path}")
 
@@ -92,20 +105,19 @@ class DfBatchesConstructor():
 
 
 
-class BatchManager:
-    def __init__(self, tool_config):
-        self.tool_config = tool_config
-        self.batches_folder = os.path.join(tool_config['shared_folder'], 'batches')
-        os.makedirs(self.batches_folder, exist_ok=True)
-        self.summaries_dir = os.path.join( self.batches_folder,self.tool_config['shared_summaries_folder'])
-        os.makedirs(self.summaries_dir, exist_ok=True)
-        self.completed_dir = os.path.join(self.batches_folder, self.tool_config['shared_completed_folder'])
-        os.makedirs(self.completed_dir, exist_ok=True)
 
-    def load_payload(self, payload_filename):
+class BatchManager(FolderSetupMixin):
+
+    def __init__(self, tool_config):
+        self.setup_shared_folders(tool_config)
+        self.tool_config = tool_config
+        self.batch_summary_logger = BatchSummaryLogger(self.tool_config)
+
+    def load_payload(self, payload_filename) -> BatchRequestPayload:
         file_path = os.path.join(self.batches_folder, payload_filename)
         file_content = FileLockManager(file_path).secure_read()
-        return json.loads(file_content)
+        data = json.loads(file_content)
+        return BatchRequestPayload.from_dict(data)
 
     def dataframe_loader(self, filepath) -> pd.DataFrame:
         try:
@@ -116,24 +128,30 @@ class BatchManager:
         except Exception as e:
             logger.error(f"Failed to load data: {e}")
 
-    def execute_job(self,job_payload,filename, credential_manager):
+    def execute_job(self,payload_filename, credential_manager):
 
-        app_logger = AppLogger(job_payload.get("user_id"),self.tool_config)
-        app_logger.session_id = job_payload.get("session_id")
-        app_logger.file_name = job_payload.get("input_file")
+        try:
+            job_payload = self.load_payload(payload_filename)
+        except Exception as e:
+            logger.error(f"Failed to load payload: {e}")
+            return None
 
-        if job_payload.get("function") == "llm_request":
+        session_logger = SessionLogger(job_payload.user_id,self.tool_config)
+        session_logger.session_id = job_payload.session_id
+        session_logger.file_name = job_payload.input_file
+
+        if job_payload.function == "llm_request":
             llm_manager = LlmManager(
-                                    app_logger, 
+                                    session_logger, 
                                     credential_manager, 
-                                    job_payload['kwargs'].get("llm_model", "gpt-4o-mini"), 
-                                    job_payload['kwargs'].get("llm_temp", 0.3)
+                                    job_payload.kwargs.get("llm_model", "gpt-4o-mini"), 
+                                    job_payload.kwargs.get("llm_temp", 0.3)
                                     )
 
             function = llm_manager.llm_request
 
         else:
-            oxylabs_manager = OxyLabsManager(app_logger, credential_manager)
+            oxylabs_manager = OxyLabsManager(session_logger, credential_manager)
 
             available_functions = {
                 "serp_paginator": oxylabs_manager.serp_paginator,
@@ -141,129 +159,85 @@ class BatchManager:
                 "get_amazon_review": oxylabs_manager.get_amazon_review,
                 "web_crawler": oxylabs_manager.web_crawler,
                 }
-            function = available_functions.get(job_payload.get("function"), None)
+            function = available_functions.get(job_payload.function, None)
 
         if not function:
-            logger.error(f"Function {job_payload.get('function')} not available")
+            logger.error(f"Function {job_payload.function} not available")
             return None
 
-        filepath = os.path.join(app_logger.session_files_folder(), job_payload.get("input_file",""))
-        dataframe = self.dataframe_loader(filepath)
+        filepath_toprocess = os.path.join(session_logger.session_files_folder(), job_payload.input_file)
+        dataframe = self.dataframe_loader(filepath_toprocess)
         df_processor= DataFrameProcessor(dataframe)
 
-        batches_constructor = DfBatchesConstructor(df_processor, app_logger)
+        batches_constructor = DfBatchesConstructor(df_processor, session_logger)
 
         try:
             total_rows = len(df_processor.processed_df)
+            self.batch_summary_logger.update_batch_summary(job_payload, status="WIP", total_rows=total_rows)
             last_percentage = 0
-            current_file_path = os.path.join(self.batches_folder, filename) 
-            current_file_path = self.update_payload_status(current_file_path, 0)
+            current_payload_filename = payload_filename
+            current_payload_filename = self.update_payload_status(current_payload_filename, 0)
             for progress in batches_constructor.df_batches_handler(
                 func=function, 
-                batch_size=job_payload.get("batch_size"), 
-                response_column=job_payload.get("response_column"), 
-                query_column=job_payload.get("query_column"), 
-                **job_payload.get("kwargs")
+                batch_size=job_payload.batch_size, 
+                response_column=job_payload.response_column, 
+                query_column=job_payload.query_column, 
+                **job_payload.kwargs
             ):
                 if isinstance(progress, int):
                     current_percentage = (progress / total_rows) * 100
                     if current_percentage - last_percentage >= 5:
                         status = int(current_percentage)
-                        current_file_path = self.update_payload_status(current_file_path, status)
-                        logging.info(f"{current_file_path}")
+                        current_payload_filename = self.update_payload_status(current_payload_filename, status)###########
+                        logging.info(f"updated processing status at {current_payload_filename}")
                         last_percentage = current_percentage
                 elif isinstance(progress, pd.DataFrame):
-                    dir_path, current_filename = os.path.split(current_file_path)
-                    self.finalize_job(current_filename, job_payload)
+                    completed_filename = self.update_payload_status(current_payload_filename, "COMPLETED")
+                    self.batch_summary_logger.update_batch_summary(job_payload, status="COMPLETED", filename=completed_filename)
+                    self.archive_payload(completed_filename)
+
+
+
+
+                    """dir_path, current_payload_filename = os.path.split(current_payload_filename)
+                    processed_filename = "processed_" + job_payload.input_file
+                    self.batch_summary_logger.update_batch_summary(job_payload, status="COMPLETED", filename=processed_filename)
+                    current_payload_filename = self.update_payload_status(current_payload_filename, "COMPLETED")
+                    self.archive_payload(current_payload_filename)"""
+
                     logging.info(f"Ended processing executing function")
         except Exception as e:
             logging.error(f"An error occurred: {str(e)}")
 
-    def update_payload_status(self, file_path, status):
+    def update_payload_status(self, payload_filename, status):
+        payload_filepath = os.path.join(self.batches_folder, payload_filename)
+        
         if isinstance(status, int):
-            new_status = f"PROCESSING_{status}"
+            new_status = f"WIP_{status}"
         elif status.upper() == "COMPLETED":
             new_status = "COMPLETED"
         else:
             raise ValueError(f"Invalid status: {status}. Must be an integer or 'COMPLETED'.")
-        
-        # Get the directory and filename separately
-        dir_path, filename = os.path.split(file_path)
-        
-        # Remove any existing status from the filename
-        base_name = re.sub(r'(_(PENDING|PROCESSING_\d+|COMPLETED))?\.json$', '', filename)
+
+        payload_dir_path, payload_filename = os.path.split(payload_filepath)
+
+        base_name = re.sub(r'(_(PENDING|WIP_\d+|COMPLETED))?\.json$', '', payload_filename)
         
         new_filename = f"{base_name}_{new_status}.json"
-        new_path = os.path.join(dir_path, new_filename)
-        file_lock = FileLockManager(file_path)
+        new_payload_path = os.path.join(payload_dir_path, new_filename)
+        file_lock = FileLockManager(payload_filepath)
 
         try:
-            file_lock.secure_rename(new_path)
-            logger.info(f"Updated {file_path} to {new_filename}")
-            return new_path  # Return the full path, not just the filename
+            file_lock.secure_rename(new_payload_path)
+            logger.info(f"Updated {payload_filename} to {new_filename}")
+            return new_filename 
         
         except Exception as e:
             logger.error(f"Error updating payload status: {str(e)}")
-            return file_path
-
-    def finalize_job(self, payload_filename, job_payload):
-        """
-        Finalizes the job by updating the batches summary CSV after processing a batch.
-        
-        Args:
-            file_path (str): Path to the processed batch JSON file.
-        """
-        
-
-        try:
-
-            flattened_data = {
-                'filename': payload_filename,
-                'status': "COMPLETED"
-            }
-            for key, value in job_payload.items():
-                if key != 'kwargs':
-                    if isinstance(value, dict):
-                        flattened_data.update({f"{key}_{sub_key}": sub_value for sub_key, sub_value in value.items()})
-                    else:
-                        flattened_data[key] = value
-            self.update_batch_summary(flattened_data, job_payload)
-            self.finalize_payload(payload_filename)
-
-        except Exception as e:
-            logger.error(f"Failed to finalize job {payload_filename}: {str(e)}")
+            return payload_filename
 
 
-    def update_batch_summary(self, flattened_data, job_payload):
-            # Create a DataFrame from the flattened data
-            new_df = pd.DataFrame([flattened_data])
-            columns_to_save = [col for col in new_df.columns if not col.startswith('kwargs_')]
-
-            csv_path = os.path.join(
-                self.summaries_dir,
-                f'{job_payload.get("user_id")}_batches_summary.csv'
-            )
-            lock_manager = FileLockManager(csv_path)
-
-            if not os.path.exists(csv_path):
-                csv_content = new_df[columns_to_save].to_csv(index=False)
-                lock_manager.secure_write(csv_content.encode())
-                logger.info(f"Created new CSV file: {csv_path}")
-            else:
-                try:
-                    existing_content = lock_manager.secure_read()
-                    existing_df = pd.read_csv(csv_path) if existing_content else pd.DataFrame()
-                    
-                    updated_df = pd.concat([existing_df, new_df[columns_to_save]], ignore_index=True)
-
-                    csv_content = updated_df.to_csv(index=False)
-                    lock_manager.secure_write(csv_content.encode())
-                except Exception as e:
-                    logger.error(f"Error updating existing CSV: {str(e)}")
-                    raise
-
-
-    def finalize_payload(self, payload_filename):
+    def archive_payload(self, payload_filename):
             payload_path = os.path.join(
                 self.batches_folder,
                 payload_filename
@@ -276,9 +250,8 @@ class BatchManager:
                 payload_filename
             )
 
-            lock_manager.secure_move(final_payload_path)
-
-            logger.info(f"Successfully updated and 'payload' to '{final_payload_path}'.")
-
-            # Update the payload status to COMPLETED
-            self.update_payload_status(final_payload_path, "COMPLETED")
+            try:
+                lock_manager.secure_move(final_payload_path)
+                logger.info(f"Successfully archived '{payload_filename}'.")
+            except Exception as e:
+                logger.error(f"Failed to archive payload '{payload_filename}': {str(e)}")

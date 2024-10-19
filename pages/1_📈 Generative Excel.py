@@ -1,7 +1,7 @@
 import logging
 logger = logging.getLogger(__name__)
 
-from src.file_manager import DataFrameProcessor
+from src.file_manager import DataFrameProcessor, BatchRequestLogger
 from src.external_tools import LlmManager, SerpApiManager, WebScraper, OxyLabsManager, openai_advanced_uses
 from src.streamlit_interface import DfRequestConstructor, openai_thread_setup
 from src.streamlit_interface import dataframe_streamlit_handler, sync_streamlit_processed_df, streamlit_batches_status
@@ -15,9 +15,9 @@ page_setup(page_config)
 
 
 if st.session_state["authentication_status"]:
-    app_logger = st.session_state["app_logger"]
+    session_logger = st.session_state["session_logger"]
     credential_manager = st.session_state['credential_manager']
-    data_loader = DataLoader("dataframe", app_logger)
+    data_loader = DataLoader("dataframe", session_logger)
 
     if isinstance(data_loader.user_file, pd.DataFrame) and not data_loader.user_file.empty:
         user_df= data_loader.user_file
@@ -26,14 +26,14 @@ if st.session_state["authentication_status"]:
 
         st.sidebar.divider()  
             
-        llm_manager = LlmManager(app_logger,credential_manager)
-        llm_manager = configure_llm_streamlit(llm_manager, LlmManager, app_logger)
+        llm_manager = LlmManager(session_logger,credential_manager)
+        llm_manager = configure_llm_streamlit(llm_manager, LlmManager, session_logger)
         
-        serpapi_manager = SerpApiManager(app_logger, credential_manager)
-        web_scraper = WebScraper(app_logger)
-        oxylabs_manager = OxyLabsManager(app_logger,credential_manager)
-        openai_advance_manager = openai_advanced_uses(app_logger, credential_manager)
-        request_constructor=DfRequestConstructor(df_processor, app_logger)
+        serpapi_manager = SerpApiManager(session_logger, credential_manager)
+        web_scraper = WebScraper(session_logger)
+        oxylabs_manager = OxyLabsManager(session_logger,credential_manager)
+        openai_advance_manager = openai_advanced_uses(session_logger, credential_manager)
+        request_constructor=DfRequestConstructor(df_processor, session_logger)
         
           
         tabs = st.tabs(["LLM", "Google", "Amazon", "Crawler", "Table Handler", "Assistant Setup","Scheduler"])
@@ -65,10 +65,10 @@ if st.session_state["authentication_status"]:
         st.session_state['processed_df'] = df_processor.processed_df.astype(str).fillna('')
 
         def get_excel():
-            return st.session_state["app_logger"].to_excel(df_processor.processed_df)
+            return st.session_state["session_logger"].to_excel(df_processor.processed_df)
 
         if st.button("prepare file to download",use_container_width=True):
-            excel_file = st.session_state["app_logger"].to_excel(df_processor.processed_df)
+            excel_file = st.session_state["session_logger"].to_excel(df_processor.processed_df)
 
             st.download_button(
                 label="Download Excel file",
@@ -80,7 +80,8 @@ if st.session_state["authentication_status"]:
                 key="download_button_footer"
             )
     st.divider()
-    streamlit_batches_status(app_logger)
+    batch_request_logger = BatchRequestLogger(session_logger.user_id, session_logger.session_id, session_logger.tool_config)
+    streamlit_batches_status(batch_request_logger)
 elif st.session_state["authentication_status"] is False:
     st.error('Username/password is incorrect')
     st.sidebar.error('Username/password is incorrect')

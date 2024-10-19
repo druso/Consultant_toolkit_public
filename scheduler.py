@@ -2,11 +2,8 @@ import logging
 logger = logging.getLogger(__name__)
 import time
 import os
-import json
-from src.external_tools import OxyLabsManager, LlmManager
 from datetime import datetime
 from src.setup import scheduler_setup, CredentialManager
-from src.file_manager import AppLogger, DataFrameProcessor, FileLockManager
 from src.batch_handler import DfBatchesConstructor, BatchManager
 import pandas as pd
 
@@ -30,10 +27,8 @@ def run_scheduler(frequency=tool_config['scheduler_frequency'], process_newest_f
 
 
         for file_path in pending_files_paths:
-            job_payload = batch_manager.load_payload(file_path)
-            if job_payload:
-                logger.info(f"Found new file to process: {file_path}")
-                batch_manager.execute_job(job_payload,file_path, credential_manager)
+            logger.info(f"Found new file to process: {file_path}")
+            batch_manager.execute_job(file_path, credential_manager)
 
         logger.info(f"Will sleep for {frequency} seconds, good night")
         time.sleep(frequency)

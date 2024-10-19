@@ -1,6 +1,7 @@
 import logging
 logger = logging.getLogger(__name__)
 from io import BytesIO, StringIO
+from src.dataformats import BatchSummaryPayload, BatchRequestPayload
 import pandas as pd
 import json
 import os
@@ -10,6 +11,7 @@ import zipfile
 import time
 from typing import Tuple, Any, Optional, List
 import shutil
+from contextlib import contextmanager
 
 
 class FileLockManager:
@@ -17,101 +19,155 @@ class FileLockManager:
         self.file_path = file_path
         self.lock_file = file_path + ".lock"
 
-    def _acquire_lock(self):
-        """Try to acquire a lock by creating a lock file."""
+    def _acquire_lock(self, timeout=10, check_interval=1):
+        start_time = time.time()
         while True:
             try:
-                # Try to create a lock file exclusively
                 fd = os.open(self.lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                # Close the file descriptor to release it after lock acquisition
                 os.close(fd)
-                #print(f"Lock acquired on {self.lock_file}")
+                logger.debug(f"Lock acquired on {self.lock_file}")
                 return True
             except FileExistsError:
-                # If the lock file already exists, wait and retry
-                #print(f"Lock already exists. Waiting to acquire lock on {self.lock_file}...")
-                time.sleep(1)  # Wait before retrying
+                if (time.time() - start_time) >= timeout:
+                    logger.error(f"Timeout while waiting to acquire lock on {self.lock_file}")
+                    raise TimeoutError(f"Could not acquire lock on {self.lock_file} within {timeout} seconds.")
+                logger.debug(f"Lock exists on {self.lock_file}. Retrying in {check_interval} seconds...")
+                time.sleep(check_interval)
+            except Exception as e:
+                logger.error(f"Unexpected error while acquiring lock: {e}")
+                raise
 
     def _release_lock(self):
-        """Release the lock by deleting the lock file."""
-        if os.path.exists(self.lock_file):
-            os.remove(self.lock_file)
-            #print(f"Lock released on {self.lock_file}")
-        #else:
-            #print(f"No lock to release on {self.lock_file}")
-
-    def secure_write(self, data):
-        """Automatically acquire and release the lock for binary writing."""
-        self._acquire_lock()
         try:
-            with open(self.file_path, "wb") as file:
-                file.write(data)
-            #print(f"Finished writing to {self.file_path}")
-        finally:
-            self._release_lock()
-
-    def secure_read(self):
-        """Automatically acquire and release the lock for reading the file as raw text."""
-        self._acquire_lock()
-        try:
-            with open(self.file_path, "r") as file:
-                data = file.read()  # Reads the file as raw text
-            #print(f"Finished reading from {self.file_path}")
-            return data
-        finally:
-            self._release_lock()
-
-    def secure_rename(self, new_path):
-        """Rename the locked file to a new path safely."""
-        try:
-            self._acquire_lock()
-            os.rename(self.file_path, new_path)
-            logger.info(f"Renamed {self.file_path} to {new_path}")
-        except Exception as e:
-            logger.error(f"Error renaming file: {str(e)}")
-            raise
-        finally:
-            self._release_lock()
-
-    def secure_remove(self):
-        """Safely remove the file using a lock."""
-        self._acquire_lock()
-        try:
-            if os.path.exists(self.file_path):
-                os.remove(self.file_path)
-                logger.info(f"Removed {self.file_path}")
-            else:
-                logger.warning(f"File {self.file_path} does not exist")
-        except Exception as e:
-            logger.error(f"Error removing file: {str(e)}")
-            raise
-        finally:
-            self._release_lock()    
-    
-    def secure_move(self, new_path):
-        """Safely move the file to a new location using a lock."""
-        self._acquire_lock()
-        try:
-            # Move the main file
-            shutil.move(self.file_path, new_path)
-            logger.info(f"Moved {self.file_path} to {new_path}")
-
-            # Handle the lock file
-            new_lock_file = new_path + ".lock"
             if os.path.exists(self.lock_file):
                 os.remove(self.lock_file)
-                logger.info(f"Removed old lock file: {self.lock_file}")
-
-            # Update the file_path and lock_file attributes
-            self.file_path = new_path
-            self.lock_file = new_lock_file
-
+                logger.debug(f"Lock released on {self.lock_file}")
         except Exception as e:
-            logger.error(f"Error moving file: {str(e)}")
-            raise
+            logger.error(f"Error releasing lock {self.lock_file}: {e}")
+
+    @contextmanager
+    def locked(self):
+        """Context manager to handle lock acquisition and release."""
+        self._acquire_lock()
+        try:
+            yield
         finally:
             self._release_lock()
 
+    def secure_write(self, data):
+        """
+        Securely write binary data to the file.
+
+        Args:
+            data (bytes): Data to write to the file.
+        """
+        with self.locked():
+            with open(self.file_path, "wb") as file:
+                file.write(data)
+            logger.debug(f"Finished writing to {self.file_path}")
+
+    def secure_read(self):
+        """
+        Securely read the file as raw text.
+
+        Returns:
+            str: Contents of the file.
+        """
+        with self.locked():
+            with open(self.file_path, "r", encoding='utf-8') as file:
+                data = file.read()
+            logger.debug(f"Finished reading from {self.file_path}")
+            return data
+
+    def secure_rename(self, new_path):
+        """
+        Securely rename the file to a new path.
+
+        Args:
+            new_path (str): The new file path.
+        """
+        with self.locked():
+            try:
+                # Rename the main file
+                os.rename(self.file_path, new_path)
+                logger.info(f"Renamed {self.file_path} to {new_path}")
+
+                # Rename the lock file to match the new file
+                new_lock_file = new_path + ".lock"
+                os.rename(self.lock_file, new_lock_file)
+                logger.debug(f"Renamed lock file from {self.lock_file} to {new_lock_file}")
+
+                # Update the internal state after successful renaming
+                self.file_path = new_path
+                self.lock_file = new_lock_file
+            except Exception as e:
+                logger.error(f"Error renaming file: {e}")
+                raise
+
+    def secure_remove(self):
+        """
+        Securely remove the file.
+        """
+        with self.locked():
+            try:
+                if os.path.exists(self.file_path):
+                    os.remove(self.file_path)
+                    logger.info(f"Removed {self.file_path}")
+                else:
+                    logger.warning(f"File {self.file_path} does not exist")
+            except Exception as e:
+                logger.error(f"Error removing file: {str(e)}")
+                raise
+
+    def secure_move(self, new_path):
+        with self.locked():
+            try:
+                shutil.move(self.file_path, new_path)
+                logger.info(f"Moved {self.file_path} to {new_path}")
+
+                # Rename the lock file to match the new file
+                new_lock_file = new_path + ".lock"
+                if os.path.exists(self.lock_file):
+                    shutil.move(self.lock_file, new_lock_file)
+                    logger.debug(f"Renamed lock file from {self.lock_file} to {new_lock_file}")
+
+                # Update internal state
+                self.file_path = new_path
+                self.lock_file = new_lock_file
+            except Exception as e:
+                logger.err
+
+    def secure_csv_update(self, update_function):
+        """
+        Securely update a CSV file using a provided update function.
+
+        Args:
+            update_function (callable): A function that takes a DataFrame as input
+                                        and returns an updated DataFrame.
+        """
+        with self.locked():
+            try:
+                # Read existing CSV or create empty DataFrame if file doesn't exist
+                try:
+                    with open(self.file_path, "r", encoding='utf-8') as file:
+                        df = pd.read_csv(file)
+                    logger.debug(f"Read {len(df)} rows from existing CSV.")
+                except FileNotFoundError:
+                    df = pd.DataFrame()
+                    logger.debug("CSV file not found. Created a new empty DataFrame.")
+
+                # Apply the update function
+                updated_df = update_function(df)
+                logger.debug(f"DataFrame updated. Now has {len(updated_df)} rows.")
+
+                # Write the updated DataFrame back to CSV
+                with open(self.file_path, "w", encoding='utf-8', newline='') as file:
+                    updated_df.to_csv(file, index=False)
+
+                logger.info(f"Successfully updated CSV file: {self.file_path}")
+            except Exception as e:
+                logger.error(f"Error updating CSV file {self.file_path}: {str(e)}")
+                raise
 
 class DataFrameProcessor:
     def __init__(self, df: pd.DataFrame,):
@@ -332,9 +388,41 @@ class DataFrameProcessor:
         self.processed_df = self.user_df.copy()
 
     
+class FolderSetupMixin:
+    def setup_shared_folders(self, tool_config):
+
+        #shared folders
+        self.shared_folder = os.getenv('SHARED_FOLDER') or tool_config.get('shared_folder') or "shared"
+        self.batches_folder = os.path.join(self.shared_folder, 'batches')
+        self.batches_summary_folder = os.path.join(self.shared_folder,tool_config['shared_summaries_folder'])
+        self.completed_dir = os.path.join(self.batches_folder, tool_config['shared_completed_folder'])
+
+        folders_to_create = [
+            self.shared_folder,
+            self.batches_folder,
+            self.batches_summary_folder,
+            self.completed_dir
+        ]
+
+        for folder in folders_to_create:
+            if not os.path.exists(folder):
+                os.makedirs(folder)
+                logger.info(f"Created directory: {folder}")
+
+    def setup_user_folders(self, tool_config, user_id):
+
+        logs_root_folder = os.getenv('LOGS_ROOT_FOLDER') or tool_config.get('logs_root_folder') or "logs"
+        self.logs_folder = f"{logs_root_folder}/{user_id}"
+        #logs folders
+        self.log_types = ["files", "requests", "openai_threads"]
+        
+        for log_type in self.log_types:
+            folder = os.path.join(self.logs_folder, log_type)
+            os.makedirs(folder, exist_ok=True)
+            setattr(self, f"{log_type}_folder", folder)
 
 
-class AppLogger() :
+class SessionLogger(FolderSetupMixin) :
     """
     Handles most of I/O operations for storing the activities
     """
@@ -343,17 +431,11 @@ class AppLogger() :
         self.user_id = user_id
         self.session_id = datetime.now().strftime('%y%m%d') +"_"+ str(uuid.uuid4())[:6]
         self.file_name = "default"
-        logs_root_folder = os.getenv('LOGS_ROOT_FOLDER') or tool_config.get('logs_root_folder') or "logs"
-        shared_folder = os.getenv('SHARED_FOLDER') or tool_config.get('shared_folder') or "shared"
         self.tool_config = tool_config
-        self.logs_folder = f"{logs_root_folder}/{user_id}"
-        self.shared_folder = f"{shared_folder}/{user_id}"
-        self.log_types = ["files", "requests", "openai_threads"]
-        
-        for log_type in self.log_types:
-            folder = os.path.join(self.logs_folder, log_type)
-            os.makedirs(folder, exist_ok=True)
-            setattr(self, f"{log_type}_folder", folder)
+
+        self.setup_user_folders(self.tool_config, self.user_id)
+        self.setup_shared_folders(self.tool_config)
+
 
     def reinitialize_session_id(self):
         self.session_id = datetime.now().strftime('%y%m%d') +"_"+ str(uuid.uuid4())[:6]
@@ -394,10 +476,6 @@ class AppLogger() :
             save_single_file(uploaded_file)
             self.file_name = uploaded_file.name
 
-    
-    def list_subfolders(self, folder_path: str) -> List[str]:
-        return [f for f in os.listdir(folder_path) if os.path.isdir(os.path.join(folder_path, f))]
-
     def zip_directory(self, folder_path: str) -> BytesIO:
         byte_io = BytesIO()
         with zipfile.ZipFile(byte_io, 'w', zipfile.ZIP_DEFLATED) as zipf:
@@ -411,7 +489,7 @@ class AppLogger() :
     def purge_logs_folder(self):
         folder = self.logs_folder
         shutil.rmtree(folder, ignore_errors=True)
-        os.makedirs(folder, exist_ok=True)
+        os.makedirs(folder, exist_ok=True)  
 
     def purge_shared_files(self):
         folder = self.shared_folder
@@ -424,6 +502,7 @@ class AppLogger() :
                         file_lock.secure_remove()
                     except Exception as e:
                         logger.error(f"Error removing file {file_path}: {str(e)}")
+
 
     def to_excel(self, df: pd.DataFrame) -> bytes:
  
@@ -489,6 +568,122 @@ class AppLogger() :
             # If JSON serialization fails, save as text
             with open(f"{folder}/{cleaned_filename}.txt", "w") as f:
                 f.write(str(response))
+
+
+class BatchRequestLogger(FolderSetupMixin):
+
+    def __init__(self, user_id, session_id, tool_config):
+        """Initializes the logger with a session ID and default values."""
+        self.user_id = user_id  
+        self.session_id = session_id
+        self.tool_config = tool_config
+        self.batch_summary_logger = BatchSummaryLogger(self.tool_config)
+        self.setup_user_folders(self.tool_config, self.user_id)
+        self.setup_shared_folders(self.tool_config)
+
+    def _batches_list(self):
+        folder = self.tool_config.get('shared_folder', 'shared')
+        batches_folder = os.path.join(folder, 'batches')
+        return os.listdir(batches_folder)
+        
+    def post_scheduler_request(self, 
+                               df, 
+                               session_logger, 
+                               function, 
+                               query_column, 
+                               response_column, 
+                               kwargs):
+        batches_list = self._batches_list()
+        batch_id = "batch_" + str(len(batches_list) + 1).zfill(3)
+
+        input_file = session_logger.log_excel(df, "batch", return_path=False, return_filename=True)
+        function_name = function.__name__ if callable(function) else function
+        processed_kwargs = {
+            key: (value.__name__ if callable(value) else 
+                  value if isinstance(value, (int, float, str, bool, type(None))) else 
+                  str(value))
+            for key, value in kwargs.items()
+        }
+
+        payload = BatchRequestPayload(
+            batch_id=batch_id,
+            user_id=self.user_id,
+            session_id=self.session_id,
+            function=function_name,
+            batch_size=10,#################################################################################################################
+            input_file=input_file,
+            query_column=query_column,
+            response_column=response_column,
+            kwargs=processed_kwargs
+        )
+
+        folder = self.tool_config.get('shared_folder', 'shared')
+        with open(f"{folder}/batches/{self.user_id}_{batch_id}_PENDING.json", "w") as f:
+            json.dump(payload.to_dict(), f, indent=4)
+            print(f"saved batch request at {folder}/batches/{batch_id}_PENDING.json")
+        self.batch_summary_logger.update_batch_summary(payload, status="PENDING")
+
+
+
+    def load_batches_summary(self):
+        """Load the batches summary CSV file using FileLockManager."""
+        csv_path = os.path.join(
+            self.tool_config['shared_folder'],
+            'batches',
+            self.tool_config['shared_summaries_folder'], 
+            f'{self.user_id}_batches_summary.csv'
+            )
+        
+        lock_manager = FileLockManager(csv_path)
+        try:
+            csv_content = lock_manager.secure_read()
+            return pd.read_csv(StringIO(csv_content))
+        except FileNotFoundError:
+            print(f"CSV file not found at {csv_path}")
+            return pd.DataFrame()
+        except Exception as e:
+            print(f"Error loading CSV: {str(e)}")
+            return pd.DataFrame()
+
+
+class BatchSummaryLogger(FolderSetupMixin):
+    def __init__(self, tool_config):
+        self.setup_shared_folders(tool_config)
+
+    def update_batch_summary(self, payload: BatchRequestPayload, status="PENDING", filename =None, total_rows=None):
+        summary_payload = BatchSummaryPayload.from_request_payload(payload, status)
+        summary_payload.schedule_time = datetime.now().isoformat()
+        if status == "WIP":
+            summary_payload.start_time = datetime.now().isoformat()
+            summary_payload.batch_size = total_rows
+        if status == "COMPLETED":
+            summary_payload.end_time = datetime.now().isoformat()
+            summary_payload.filename = filename
+        summary_payload.status = status
+
+        csv_path = os.path.join(
+            self.batches_summary_folder,
+            f'{payload.user_id}_batches_summary.csv'
+        )
+        def update_function(df):
+            new_row = pd.DataFrame([summary_payload.to_dict()])
+            return pd.concat([df, new_row], ignore_index=True)
+        
+        lock_manager = FileLockManager(csv_path)
+        lock_manager.secure_csv_update(update_function)
+
+        logger.info(f"Updated CSV summary for user {payload.user_id}")
+
+
+
+class OpenaiThreadLogger(FolderSetupMixin) :
+
+    def __init__(self, user_id: str, tool_config):
+
+        self.user_id = user_id
+        self.tool_config = tool_config
+        self.setup_user_folders(self.tool_config, self.user_id)
+
 
     def log_openai_thread(self, thread_id: str, thread_name: str, thread_file_ids: List[str], thread_history: List[dict], user_setup_msg: str, assistant_setup_msg:str):
         thread_file = {
@@ -559,61 +754,3 @@ class AppLogger() :
             print(f"Thread log for thread id: {thread_id} does not exist.")
         except Exception as e:
             print(f"Error deleting thread log: {e}")
-
-    def batches_list(self):
-        folder = self.tool_config.get('shared_folder', 'shared')
-        batches_folder = os.path.join(folder, 'batches')
-        return os.listdir(batches_folder)
-        
-    def post_scheduler_request(self,df, function, query_column, response_column, kwargs):
-        
-        batches_list = self.batches_list()
-        batch_id = "batch_" + str(len(batches_list) + 1).zfill(3)
-
-        input_file = self.log_excel( df, "batch", return_path = False, return_filename=True) 
-        function_name = function.__name__ if callable(function) else function
-        processed_kwargs = {}
-        for key, value in kwargs.items():
-            if callable(value):
-                processed_kwargs[key] = value.__name__  # Store function name as string
-            elif isinstance(value, (int, float, str, bool, type(None))):
-                processed_kwargs[key] = value  # These types are JSON serializable
-            else:
-                processed_kwargs[key] = str(value)  # Convert other types to string
-        payload={
-            "batch_id": batch_id,
-            "user_id": self.user_id,
-            "session_id": self.session_id,
-            "function": function_name,
-            "batch_size": 10,
-            "input_file": input_file,
-            "query_column": query_column,
-            "response_column": response_column,
-            "kwargs": processed_kwargs
-                }
-        folder= self.tool_config.get('shared_folder', 'shared')
-        with open(f"{folder}/batches/{self.user_id}_{batch_id}_PENDING.json", "w") as f:
-            json.dump(payload, f, indent=4)
-            print(f"saved batch request at {folder}/batches/{batch_id}_PENDING.json")
-
-
-
-    def load_batches_summary(self):
-        """Load the batches summary CSV file using FileLockManager."""
-        csv_path = os.path.join(
-            self.tool_config['shared_folder'],
-            'batches',
-            self.tool_config['shared_summaries_folder'], 
-            f'{self.user_id}_batches_summary.csv'
-            )
-        
-        lock_manager = FileLockManager(csv_path)
-        try:
-            csv_content = lock_manager.secure_read()
-            return pd.read_csv(StringIO(csv_content))
-        except FileNotFoundError:
-            print(f"CSV file not found at {csv_path}")
-            return pd.DataFrame()
-        except Exception as e:
-            print(f"Error loading CSV: {str(e)}")
-            return pd.DataFrame()
