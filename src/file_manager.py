@@ -9,6 +9,7 @@ from datetime import datetime
 import uuid
 import zipfile
 import time
+import re
 from typing import Tuple, Any, Optional, List
 import shutil
 from contextlib import contextmanager
@@ -135,7 +136,8 @@ class FileLockManager:
                 self.file_path = new_path
                 self.lock_file = new_lock_file
             except Exception as e:
-                logger.err
+                logger.error(f"Error moving file: {e}")
+                raise
 
     def secure_csv_update(self, update_data, update_function, **kwargs):
         """
@@ -397,12 +399,14 @@ class FolderSetupMixin:
         self.batches_folder = os.path.join(self.shared_folder, 'batches')
         self.batches_summary_folder = os.path.join(self.shared_folder,tool_config['shared_summaries_folder'])
         self.completed_dir = os.path.join(self.batches_folder, tool_config['shared_completed_folder'])
+        self.wip_folder = os.path.join(self.shared_folder, tool_config['shared_wip_folder'])
 
         folders_to_create = [
             self.shared_folder,
             self.batches_folder,
             self.batches_summary_folder,
-            self.completed_dir
+            self.completed_dir,
+            self.wip_folder,
         ]
 
         for folder in folders_to_create:
@@ -625,7 +629,11 @@ class BatchRequestLogger(FolderSetupMixin):
             print(f"saved batch request at {folder}/batches/{batch_id}_PENDING.json")
         self.batch_summary_logger.update_batch_summary(payload, status="PENDING", filename=payload_filename)
 
-
+    def read_wip_progress(self, user_id, batch_id):
+        for file in os.listdir(self.wip_folder):
+            if file.startswith(f"{user_id}_{batch_id}_"):
+                return int(file.split('_')[-1])
+        return 0
 
     def load_batches_summary(self):
         """Load the batches summary CSV file using FileLockManager."""
@@ -667,6 +675,12 @@ class BatchSummaryLogger(FolderSetupMixin):
             summary_payload.end_time = datetime.now().isoformat()
             summary_payload.filename = filename
             update_fields.extend(['end_time', 'filename'])
+        elif status == "CANCELLED":
+            summary_payload.end_time = datetime.now().isoformat()
+            update_fields.extend(['end_time', 'filename'])
+        elif status == "STOPPED":
+            summary_payload.end_time = datetime.now().isoformat()
+            update_fields.extend(['end_time', 'filename'])
 
         csv_path = os.path.join(
             self.batches_summary_folder,
@@ -694,6 +708,76 @@ class BatchSummaryLogger(FolderSetupMixin):
         )
 
         logger.info(f"Updated CSV summary for user {payload.user_id}")
+
+
+    def update_wip_progress(self, user_id, batch_id, wip_percentage):
+        """
+        Creates or updates an empty file with a name that reflects the batch progress.
+        """
+        if not 0 <= wip_percentage <= 100:
+            raise ValueError("Progress must be between 0 and 100")
+        
+        for existing_file in os.listdir(self.wip_folder):
+            if existing_file.startswith(f"{user_id}_{batch_id}_"):
+                os.remove(os.path.join(self.wip_folder, existing_file))
+
+        file_name = f"{user_id}_{batch_id}_{wip_percentage}"
+        file_path = os.path.join(self.wip_folder, file_name)
+
+        if not wip_percentage == 100:
+            open(file_path, 'w').close()
+            print(f"Progress updated: {file_name}")
+    
+    def post_stop_request(self, user_id, batch_id):
+        stop_requests = self.check_stop_requests()
+        file_name = f"{user_id}_{batch_id}_STOP"
+        if file_name not in stop_requests:
+            file_path = os.path.join(self.batches_folder, file_name)
+            open(file_path, 'w').close()
+        else:
+            raise ValueError(f"Stop request for batch {batch_id} already exists.")
+    
+    def check_stop_requests(self):
+        stop_requests = []
+        for file in os.listdir(self.batches_folder):
+            if file.endswith("_STOP"):
+                stop_requests.append(file)
+        return stop_requests
+
+    def handled_stop_request(self, user_id, batch_id):
+        file_name = f"{user_id}_{batch_id}_STOP"
+        file_path = os.path.join(self.batches_folder, file_name)
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+    def update_payload_status(self, payload_filename, status):
+        payload_filepath = os.path.join(self.batches_folder, payload_filename)
+        
+        if not status in ["PENDING", "WIP", "COMPLETED", "CANCELLED", "STOPPED"]:
+            raise ValueError(f"Invalid status: '{status}'")
+
+        payload_dir_path, payload_filename = os.path.split(payload_filepath)
+
+        base_name = re.sub(r'_(PENDING|WIP|COMPLETED)\.json$', '', payload_filename)
+        
+        new_filename = f"{base_name}_{status}.json"
+        new_payload_path = os.path.join(payload_dir_path, new_filename)
+        file_lock = FileLockManager(payload_filepath)
+
+        try:
+            file_lock.secure_rename(new_payload_path)
+            logger.info(f"Updated {payload_filename} to {new_filename}")  
+
+            if status == "COMPLETED" or status == "CANCELLED" or status == "STOPPED":
+                archived_payload_path = os.path.join(self.completed_dir,new_filename)
+
+                FileLockManager(new_payload_path).secure_move(archived_payload_path)
+            logger.info(f"Successfully updated payload status for '{new_filename}'.")
+            return new_filename 
+                  
+        except Exception as e:
+            logger.error(f"Error updating payload status: {str(e)}")
+            return payload_filename
 
 
 

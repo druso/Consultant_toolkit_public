@@ -40,7 +40,7 @@ class BatchSummaryPayload:
     user_id: str
     session_id: str
     function: str
-    batch_size: int
+    batch_size: 0
     input_file: str
     query_column: str
     response_column: str
@@ -66,7 +66,8 @@ class BatchSummaryPayload:
             response_column=payload.response_column,
             status=status
         )
-    
+    #I should add a calculated column for the time it takes to process the batch
+    #I should add a column for the position of the resulted file (now constructed in streamlit_interface)
 
 
 

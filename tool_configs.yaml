@@ -6,6 +6,7 @@ require_login: False
 logs_root_folder: logs
 purge_user_data_password: 'pinguino'
 
+
 ## Assistants base config 
 assistant_configs:
   assistant_name: Generic Data Analyst
@@ -18,6 +19,7 @@ assistant_configs:
 shared_folder: shared
 shared_summaries_folder: summaries
 shared_completed_folder: archived
+shared_wip_folder: wip
 scheduler_frequency: 180
 
 

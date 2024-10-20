@@ -2,7 +2,7 @@ from src.prompts import sysmsg_keyword_categorizer,sysmsg_review_analyst_templat
 
 
 from src.external_tools import LlmManager, StopProcessingError, RetryableError, SkippableError, openai_advanced_uses
-from src.file_manager import DataFrameProcessor, SessionLogger, OpenaiThreadLogger, BatchRequestLogger
+from src.file_manager import DataFrameProcessor, SessionLogger, OpenaiThreadLogger, BatchRequestLogger, BatchSummaryLogger
 from src.batch_handler import DfBatchesConstructor
 import streamlit as st
 import pandas as pd
@@ -730,69 +730,145 @@ def dataframe_streamlit_handler(df_processor:DataFrameProcessor):
 
         return df_processor
 
-def streamlit_batches_status(batch_request_logger:BatchRequestLogger):
-    st.header("Batch Processing Status")
-    # Load the CSV file
-    batches_df = batch_request_logger.load_batches_summary()
-    if  st.sidebar.button("update batch list", use_container_width=True):
-        batches_df = batch_request_logger.load_batches_summary()
-    
-    if batches_df.empty:
-        st.warning("No batch data available.")
-        return
-    
-    batches_df = batches_df[batches_df['user_id'] == batch_request_logger.user_id]
-    # Display recap of batches in the pipeline
-    st.subheader("Batches Recap")
-    total_batches = len(batches_df)
-    completed_batches = len(batches_df[batches_df['status'] == 'COMPLETED'])
-    pending_batches = len(batches_df[batches_df['status'] == 'PENDING'])
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Batches", total_batches)
-    col2.metric("Completed Batches", completed_batches)
-    col3.metric("Pending Batches", pending_batches)
+class streamlit_batches_status():
 
-    # Display the DataFrame
-    st.subheader("Batches Data")
-    
-    columns_to_display = ['filename', 'status', 'batch_id', 'session_id', 'function']
-    
-    st.dataframe(batches_df[columns_to_display])
-
-    # Add a select box for completed batches
-    completed_batches = batches_df[batches_df['status'] == 'COMPLETED']
-    if not completed_batches.empty:
-        selected_filename = st.selectbox(
-            "Select a completed batch to download:",
-            options=completed_batches['filename'].tolist(),
-            #format_func=lambda x: f"{x} - {completed_batches[completed_batches['filename'] == x]['batch_id'].values[0]}"
-        )
-
-        if selected_filename:
-            selected_row = completed_batches[completed_batches['filename'] == selected_filename].iloc[0]
-            
-            # Construct the path to the output file
-            filename = f"processed_{selected_row['input_file']}"
-            
-            output_file_path = os.path.join(
-                batch_request_logger.tool_config['logs_root_folder'], 
-                f"{batch_request_logger.user_id}",
-                "files", 
-                f"{selected_row['session_id']}", 
-                filename)###########################################################HANDLING PATH NAME LIKE THIS IS LESS THAN IDEAL
+    def __init__(self,  session_logger:SessionLogger):
+        self.session_logger = session_logger
+        self.batch_request_logger = BatchRequestLogger(self.session_logger.user_id,self.session_logger.session_id, self.session_logger.tool_config)  #makes no sense to activate this with session id
+        self.batch_summary_logger = BatchSummaryLogger(self.session_logger.tool_config)
+        self.hard_update()
+        self.main_interface()
+        self.sidebar_options()
 
 
-            # Check if the output file exists
-            if os.path.isfile(output_file_path):
-                with open(output_file_path, "rb") as file:
-                    st.download_button(
-                        label="Download Output File",
-                        data=file,
-                        file_name=filename,
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-            else:
-                st.warning("Output file not found for the selected batch.")
-    else:
-        st.info("No completed batches available for download.")
+    def update_batches_df(self):
+        self.batches_df = self.batch_request_logger.load_batches_summary()
+        summary_df = self.batch_request_logger.load_batches_summary()
+        self.batches_df = summary_df[summary_df['user_id'] == self.batch_request_logger.user_id]
+        
+        column_to_datetime = ['schedule_time', 'start_time', 'end_time']
+        for column_name in column_to_datetime:
+            try:
+                self.batches_df[column_name] = pd.to_datetime(self.batches_df[column_name])
+            except Exception as e:
+                st.warning(f"Failed to convert {column_name} to datetime: {str(e)}")
+
+    def hard_update(self):
+        self.update_batches_df()
+        self.completed_batches = self.batches_df[self.batches_df['status'] == 'COMPLETED']
+        self.wip_batches = self.batches_df[self.batches_df['status'] == 'WIP']
+        self.pending_batches = self.batches_df[self.batches_df['status'] == 'PENDING']
+
+
+    def sidebar_options(self):
+        if st.sidebar.button("Hard update Batches status", use_container_width=True):
+            self.hard_update()
+        if st.sidebar.checkbox("Auto update batch list"):
+            while True:
+                time.sleep(1)
+                self.update_batches_df()
+
+
+    def main_interface(self):
+        # Load the CSV file
+        if self.batches_df.empty:
+            st.warning("No batch data available.")
+            return
+        self.display_batches_recap()
+        self.display_wip_batches_progress()
+        self.display_batches_data()
+        self.download_data_interface()
+        self.stop_batch_interface()
+
+
+    def display_batches_recap(self):
+        # Display recap of batches in the pipeline
+        st.write("### Batches Recap")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Completed Batches", len(self.completed_batches))
+        col2.metric("Wip Batches", len(self.wip_batches))
+        col3.metric("Pending Batches", len(self.pending_batches))
+
+    def display_wip_batches_progress(self):
+        st.write("### Wip Batches Progress")
+        if self.wip_batches.empty:
+            st.info("No batches in progress")
+        else:
+            for batches in self.wip_batches:
+                batch_progress = self.batch_request_logger.read_wip_progress(batches['user_id'], batches['batch_id'])
+                progress_bar = st.progress(100, text=f"Progress for {batches['batch_id']} on file {batches['input_file']}")
+                progress_bar.progress(batch_progress)
+    
+
+    def display_batches_data(self):
+        # Display the DataFrame
+        st.write("### Batches Data")
+        st.write("Overview of all batches:")
+        columns_to_display = ['batch_id', 'status', 'input_file', 'session_id', 'function', 'schedule_time']  
+        st.dataframe(self.batches_df[columns_to_display], hide_index=True, use_container_width=True)
+
+
+    def download_data_interface(self):
+        # Add a select box for completed batches
+        st.write("### Download Completed Batches")
+
+        st.write("Select a batch to download a result:")
+        if not self.completed_batches.empty:
+            selected_batch_id = st.selectbox(
+                "Select a completed batch to download:",
+                options=self.completed_batches['batch_id'].tolist(),
+            )
+
+            if selected_batch_id:
+                selected_row = self.completed_batches[self.completed_batches['batch_id'] == selected_batch_id].iloc[0]
+                
+                filename = f"processed_{selected_row['input_file']}"
+                output_file_path = os.path.join(
+                    self.batch_request_logger.tool_config['logs_root_folder'], 
+                    self.batch_request_logger.user_id,
+                    "files", 
+                    selected_row['session_id'], 
+                    filename)###########################################################HANDLING PATH NAME LIKE THIS IS LESS THAN IDEAL, SHOULD HAVE IT IN THE CSV
+
+                # Check if the output file exists
+                if os.path.isfile(output_file_path):
+                    with open(output_file_path, "rb") as file:
+                        st.download_button(
+                            label="Download Output File",
+                            use_container_width=True,
+                            data=file,
+                            file_name=filename,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                else:
+                    st.warning("Output file not found for the selected batch.")
+        else:
+            st.info("No completed batches available for download.")
+
+    def stop_batch_interface(self):
+        # Add a select box for stopping a batch
+        st.write("### Stop Batches")
+        st.write("Select a batch to post a stop request:")
+        if not self.pending_batches.empty or not self.wip_batches.empty:
+            stoppable_batches = pd.concat([self.pending_batches, self.wip_batches])
+
+            selected_filename = st.selectbox(
+                "Select a batch to stop:",
+                options=stoppable_batches['filename'].tolist(),
+            )
+            if selected_filename:
+                selected_row = stoppable_batches[stoppable_batches['filename'] == selected_filename].iloc[0]
+                if st.button("Stop batch", use_container_width=True):
+                    try:    
+                        self.batch_summary_logger.post_stop_request(selected_row['user_id'], selected_row['batch_id'])
+                    except ValueError as e:
+                        st.error(e)
+        else:
+            st.info("No batches to stop")
+        
+        st.write("Pending Stop Requests:")
+        pending_stop_requests = self.batch_summary_logger.check_stop_requests()
+        if pending_stop_requests:
+            st.dataframe(pending_stop_requests, hide_index=True, use_container_width=True)
+        else:
+            st.info("No pending stop requests")

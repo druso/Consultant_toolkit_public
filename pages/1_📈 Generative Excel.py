@@ -79,9 +79,6 @@ if st.session_state["authentication_status"]:
                 type="primary",
                 key="download_button_footer"
             )
-    st.divider()
-    batch_request_logger = BatchRequestLogger(session_logger.user_id, session_logger.session_id, session_logger.tool_config)
-    streamlit_batches_status(batch_request_logger)
 elif st.session_state["authentication_status"] is False:
     st.error('Username/password is incorrect')
     st.sidebar.error('Username/password is incorrect')

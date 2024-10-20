@@ -14,6 +14,7 @@ from src.file_manager import(
     SessionLogger, 
     FolderSetupMixin, 
     BatchSummaryLogger,
+    BatchProgressLogger,
     )
 from src.dataformats import BatchRequestPayload
 import pandas as pd
@@ -121,6 +122,7 @@ class BatchManager(FolderSetupMixin):
     def __init__(self, tool_config):
         self.setup_shared_folders(tool_config)
         self.tool_config = tool_config
+        self.progress_logger = BatchProgressLogger(self.tool_config)
         self.batch_summary_logger = BatchSummaryLogger(self.tool_config)
 
     def load_payload(self, payload_filename) -> BatchRequestPayload:
@@ -145,10 +147,7 @@ class BatchManager(FolderSetupMixin):
         except Exception as e:
             logger.error(f"Failed to load payload: {e}")
             return None
-        
-        if self.check_batch_stop(job_payload, payload_filename, "PENDING"):
-            return None
-        
+
         session_logger = SessionLogger(job_payload.user_id,self.tool_config)
         session_logger.session_id = job_payload.session_id
         session_logger.file_name = job_payload.input_file
@@ -188,8 +187,8 @@ class BatchManager(FolderSetupMixin):
             total_rows = df_processor.processed_df[job_payload.query_column].notna().sum()
             current_payload_filename = payload_filename
             self.batch_summary_logger.update_batch_summary(job_payload, status="WIP", total_rows=total_rows)
-            current_payload_filename = self.batch_summary_logger.update_payload_status(current_payload_filename, "WIP")
-            self.batch_summary_logger.update_wip_progress(job_payload.user_id, job_payload.batch_id, 0)
+            current_payload_filename = self.update_payload_status(current_payload_filename, "WIP")
+            self.update_wip_progress(job_payload.user_id, job_payload.batch_id, 0)
             for progress in batches_constructor.df_batches_handler(
                 func=function, 
                 batch_size=job_payload.batch_size, 
@@ -201,16 +200,15 @@ class BatchManager(FolderSetupMixin):
                     pass
                 
                 if progress["df"] is None and progress["progress_saved"]:
-                    if self.check_batch_stop(job_payload, payload_filename, "WIP"):
-                        return None
+                    print (progress)
                     current_percentage = (progress["processed_count"] / total_rows) * 100
                     status = int(current_percentage)
-                    self.batch_summary_logger.update_wip_progress(job_payload.user_id, job_payload.batch_id, status)
+                    self.update_wip_progress(job_payload.user_id, job_payload.batch_id, status)
                     logging.info(f"updated processing status")
 
                 elif progress["df"] is not None:
-                    self.batch_summary_logger.update_wip_progress(job_payload.user_id, job_payload.batch_id, 100)
-                    completed_filename = self.batch_summary_logger.update_payload_status(current_payload_filename, "COMPLETED")
+                    self.update_wip_progress(job_payload.user_id, job_payload.batch_id, 100)
+                    completed_filename = self.update_payload_status(current_payload_filename, "COMPLETED")
                     self.batch_summary_logger.update_batch_summary(job_payload, status="COMPLETED", filename=completed_filename)
                     
                     logging.info(f"Ended processing executing function")
@@ -218,19 +216,77 @@ class BatchManager(FolderSetupMixin):
         except Exception as e:
             logging.error(f"An error occurred: {str(e)}")
 
-    def check_batch_stop(self, job_payload, payload_filename, status):
 
-        stop_check_filename = job_payload.user_id + "_" + job_payload.batch_id + "_STOP"
-        logger.warning(f"Checking stop request for {stop_check_filename}")
-        if stop_check_filename in self.batch_summary_logger.check_stop_requests():
-            logger.info(f"Stop request found for batch {job_payload.batch_id}")
-            if status == "PENDING":
-                completed_filename = self.batch_summary_logger.update_payload_status(payload_filename, "CANCELLED")
-                self.batch_summary_logger.update_batch_summary(job_payload, status="CANCELLED", filename=completed_filename)
-            elif status == "WIP":
-                completed_filename = self.batch_summary_logger.update_payload_status(payload_filename, "STOPPED")
-                self.batch_summary_logger.update_batch_summary(job_payload, status="STOPPED", filename=completed_filename)
-            self.batch_summary_logger.handled_stop_request(job_payload.user_id, job_payload.batch_id)
-            return True
-        else: 
-            return False
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    def update_wip_progress(self, user_id, batch_id, wip_percentage):
+        """
+        Creates or updates an empty file with a name that reflects the batch progress.
+        """
+        if not 0 <= wip_percentage <= 100:
+            raise ValueError("Progress must be between 0 and 100")
+        
+        for existing_file in os.listdir(self.wip_folder):
+            if existing_file.startswith(f"{user_id}_{batch_id}_"):
+                os.remove(os.path.join(self.wip_folder, existing_file))
+
+        file_name = f"{user_id}_{batch_id}_{wip_percentage}"
+        file_path = os.path.join(self.wip_folder, file_name)
+
+        if not wip_percentage == 100:
+            open(file_path, 'w').close()
+            print(f"Progress updated: {file_name}")
+    
+    def post_stop_request(self, user_id, batch_id):
+        file_name = f"{user_id}_{batch_id}_STOP"
+        file_path = os.path.join(self.batches_folder, file_name)
+        open(file_path, 'w').close()
+    
+    def handled_stop_request(self, user_id, batch_id):
+        file_name = f"{user_id}_{batch_id}_STOP"
+        file_path = os.path.join(self.batches_folder, file_name)
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+    def update_payload_status(self, payload_filename, status):
+        payload_filepath = os.path.join(self.batches_folder, payload_filename)
+        
+        if not status in ["PENDING", "WIP", "COMPLETED"]:
+            raise ValueError(f"Invalid status: {status}. Must be 'PENDING', 'WIP', or 'COMPLETED'.")
+
+        payload_dir_path, payload_filename = os.path.split(payload_filepath)
+
+        base_name = re.sub(r'_(PENDING|WIP|COMPLETED)\.json$', '', payload_filename)
+        
+        new_filename = f"{base_name}_{status}.json"
+        new_payload_path = os.path.join(payload_dir_path, new_filename)
+        file_lock = FileLockManager(payload_filepath)
+
+        try:
+            file_lock.secure_rename(new_payload_path)
+            logger.info(f"Updated {payload_filename} to {new_filename}")        
+            if status == "COMPLETED":
+                archived_payload_path = os.path.join(self.completed_dir,payload_filename)
+                FileLockManager(payload_dir_path).secure_move(archived_payload_path)
+            logger.info(f"Successfully updated payload status for '{payload_filename}'.")
+            return new_filename 
+                  
+        except Exception as e:
+            logger.error(f"Error updating payload status: {str(e)}")
+            return payload_filename
