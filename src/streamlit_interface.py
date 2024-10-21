@@ -737,27 +737,34 @@ class streamlit_batches_status():
         self.batch_request_logger = BatchRequestLogger(self.session_logger.user_id,self.session_logger.session_id, self.session_logger.tool_config)  #makes no sense to activate this with session id
         self.batch_summary_logger = BatchSummaryLogger(self.session_logger.tool_config)
         self.hard_update()
-        self.main_interface()
-        self.sidebar_options()
+        if not self.batches_df.empty:
+            self.main_interface()
+            self.sidebar_options()
 
 
     def update_batches_df(self):
-        self.batches_df = self.batch_request_logger.load_batches_summary()
-        summary_df = self.batch_request_logger.load_batches_summary()
-        self.batches_df = summary_df[summary_df['user_id'] == self.batch_request_logger.user_id]
         
-        column_to_datetime = ['schedule_time', 'start_time', 'end_time']
-        for column_name in column_to_datetime:
-            try:
-                self.batches_df[column_name] = pd.to_datetime(self.batches_df[column_name])
-            except Exception as e:
-                st.warning(f"Failed to convert {column_name} to datetime: {str(e)}")
+        summary_df = self.batch_request_logger.load_batches_summary()
+        
+        self.batches_df = summary_df
+        if self.batches_df.empty:    
+            st.warning("No batches available")
+            self.batches_df = pd.DataFrame()
+        else:
+            self.batches_df = summary_df[summary_df.get('user_id') == self.batch_request_logger.user_id]
+            column_to_datetime = ['schedule_time', 'start_time', 'end_time']
+            for column_name in column_to_datetime:
+                try:
+                    self.batches_df[column_name] = pd.to_datetime(self.batches_df[column_name])
+                except Exception as e:
+                    st.warning(f"Failed to convert {column_name} to datetime: {str(e)}")
 
     def hard_update(self):
         self.update_batches_df()
-        self.completed_batches = self.batches_df[self.batches_df['status'] == 'COMPLETED']
-        self.wip_batches = self.batches_df[self.batches_df['status'] == 'WIP']
-        self.pending_batches = self.batches_df[self.batches_df['status'] == 'PENDING']
+        if not self.batches_df.empty:
+            self.completed_batches = self.batches_df[self.batches_df['status'] == 'COMPLETED'] 
+            self.wip_batches = self.batches_df[self.batches_df['status'] == 'WIP']
+            self.pending_batches = self.batches_df[self.batches_df['status'] == 'PENDING']
 
 
     def sidebar_options(self):
