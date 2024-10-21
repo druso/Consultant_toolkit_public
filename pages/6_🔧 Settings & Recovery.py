@@ -71,8 +71,8 @@ if st.session_state["authentication_status"]:
     selected_logs_folder = None
 
     if logs_folder:
-        available_logs = session_logger.list_subfolders(logs_folder)
-        selected_logs_folder = st.selectbox('Select a folder', [''] + available_logs)
+        
+        selected_logs_folder = st.selectbox('Select a folder', [''] + os.listdir(logs_folder))
 
     # Create the "Prepare the ZIP" button, disabled if no folder is selected
     if st.button('Prepare the ZIP', type='primary', use_container_width=True, disabled=not selected_logs_folder):
