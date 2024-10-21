@@ -327,9 +327,9 @@ class DataFrameProcessor:
         new_type = self.get_data_type(column_name)
 
         if original_type != new_type:
-            print(f"Column '{column_name}' has been parsed from {original_type} to {new_type}")
+            logger.info(f"Column '{column_name}' has been parsed from {original_type} to {new_type}")
         else:
-            print(f"No change in data type. Column '{column_name}' remains as {new_type}")
+            logger.info(f"No change in data type. Column '{column_name}' remains as {new_type}")
 
 
     def generate_column_summary(self, df):
@@ -468,9 +468,9 @@ class SessionLogger(FolderSetupMixin) :
             if force_save or not os.path.exists(file_path):
                 with open(file_path, "wb") as f:
                     FileLockManager(file_path).secure_write(file.getbuffer())
-                print(f"Saved original file {file_path}")
+                logger.info(f"Saved original file {file_path}")
             else:
-                #print(f"File {file_path} already exists. Skipping.")
+                #logger.error(f"File {file_path} already exists. Skipping.")
                 pass
 
         if isinstance(uploaded_file, list):
@@ -536,7 +536,7 @@ class SessionLogger(FolderSetupMixin) :
         with open(path, "wb") as f:
             #f.write(self.to_excel(df))
             FileLockManager(path).secure_write(self.to_excel(df))
-        print (f"saved excel log at {path}")
+        logger.info (f"saved excel log at {path}")
         if return_path:
             return path
         if return_filename:
@@ -562,13 +562,13 @@ class SessionLogger(FolderSetupMixin) :
         cleaned_filename = ''.join(c for c in cleaned_filename if c.isalnum() or c in ('_', '-'))
 
         if cleaned_filename != filename:
-            print(f"Filename cleaned from '{filename}' to '{cleaned_filename}'")
+            logger.info(f"Filename cleaned from '{filename}' to '{cleaned_filename}'")
 
         try:
             # Attempt to save as JSON
             with open(f"{folder}/{cleaned_filename}.json", "w") as f:
                 json.dump(response, f, indent=4)
-            print (f"saved json log at {folder}/{cleaned_filename}.json")
+            logger.info (f"saved json log at {folder}/{cleaned_filename}.json")
         except TypeError:
             # If JSON serialization fails, save as text
             with open(f"{folder}/{cleaned_filename}.txt", "w") as f:
@@ -586,10 +586,24 @@ class BatchRequestLogger(FolderSetupMixin):
         self.setup_user_folders(self.tool_config, self.user_id)
         self.setup_shared_folders(self.tool_config)
 
-    def _batches_list(self):
-        folder = self.tool_config.get('shared_folder', 'shared')
-        batches_folder = os.path.join(folder, 'batches')
-        return os.listdir(batches_folder)
+    def _generate_batch_id(self):
+        def get_highest_batch_number(directory):
+            pattern = r".*batch_(\d{3})_(PENDING|WIP|COMPLETED|CANCELLED|STOPPED)\.json"
+            highest_number = 0
+            for filename in os.listdir(directory):
+                match = re.match(pattern, filename)
+                if match:
+                    batch_number = int(match.group(1))
+                    highest_number = max(highest_number, batch_number)
+            return highest_number
+
+        highest_in_batches = get_highest_batch_number(self.batches_folder)
+        highest_in_completed = get_highest_batch_number(self.completed_dir)
+        
+        highest_overall = max(highest_in_batches, highest_in_completed)
+        new_batch_number = highest_overall + 1
+        
+        return f"batch_{new_batch_number:03d}"
         
     def post_scheduler_request(self, 
                                df, 
@@ -598,8 +612,8 @@ class BatchRequestLogger(FolderSetupMixin):
                                query_column, 
                                response_column, 
                                kwargs):
-        batches_list = self._batches_list()
-        batch_id = "batch_" + str(len(batches_list) + 1).zfill(3)
+        batch_id = self._generate_batch_id()
+        #batch_id = "batch_" + str(len(batches_list) + 1).zfill(3)
 
         input_file = session_logger.log_excel(df, "batch", return_path=False, return_filename=True)
         function_name = function.__name__ if callable(function) else function
@@ -626,7 +640,7 @@ class BatchRequestLogger(FolderSetupMixin):
         payload_filename=f"{self.user_id}_{batch_id}_PENDING.json"
         with open(f"{folder}/batches/{payload_filename}", "w") as f:
             json.dump(payload.to_dict(), f, indent=4)
-            print(f"saved batch request at {folder}/batches/{batch_id}_PENDING.json")
+            logger.info(f"saved batch request at {folder}/batches/{batch_id}_PENDING.json")
         self.batch_summary_logger.update_batch_summary(payload, status="PENDING", filename=payload_filename)
 
     def read_wip_progress(self, user_id, batch_id):
@@ -648,10 +662,10 @@ class BatchRequestLogger(FolderSetupMixin):
             csv_content = lock_manager.secure_read()
             return pd.read_csv(StringIO(csv_content))
         except FileNotFoundError:
-            print(f"CSV file not found at {csv_path}")
+            logger.warning(f"CSV file not found at {csv_path}")
             return pd.DataFrame()
         except Exception as e:
-            print(f"Error loading CSV: {str(e)}")
+            logger.error(f"Error loading CSV: {str(e)}")
             return pd.DataFrame()
 
 
@@ -726,7 +740,7 @@ class BatchSummaryLogger(FolderSetupMixin):
 
         if not wip_percentage == 100:
             open(file_path, 'w').close()
-            print(f"Progress updated: {file_name}")
+            logger.info(f"Progress updated: {file_name}")
     
     def post_stop_request(self, user_id, batch_id):
         stop_requests = self.check_stop_requests()
@@ -825,9 +839,9 @@ class OpenaiThreadLogger(FolderSetupMixin) :
                     if id: 
                         thread_list.append((thread_id, thread_name))
                 except json.JSONDecodeError:
-                    print(f"Error reading JSON file: {filename}")
+                    logger.error(f"Error reading JSON file: {filename}")
                 except Exception as e:
-                    print(f"Error processing file {filename}: {str(e)}")
+                    logger.error(f"Error processing file {filename}: {str(e)}")
  
         return thread_list
     
@@ -838,7 +852,7 @@ class OpenaiThreadLogger(FolderSetupMixin) :
                 thread_data = json.load(f)
                 return thread_data
         except:
-            print(f"thread log for thread id: {thread_id} does not exist")
+            logger.warning(f"thread log for thread id: {thread_id} does not exist")
 
     def get_thread_history(self, thread_id):
         thread_file = self.get_thread_info(thread_id)
@@ -854,8 +868,8 @@ class OpenaiThreadLogger(FolderSetupMixin) :
         file_path = os.path.join(self.openai_threads_folder, thread_id + ".json")
         try:
             os.remove(file_path)
-            print(f"Thread data for thread id: {thread_id} has been deleted.")
+            logger.info(f"Thread data for thread id: {thread_id} has been deleted.")
         except FileNotFoundError:
-            print(f"Thread log for thread id: {thread_id} does not exist.")
+            logger.warning(f"Thread log for thread id: {thread_id} does not exist.")
         except Exception as e:
-            print(f"Error deleting thread log: {e}")
+            logger.error(f"Error deleting thread log: {e}")

@@ -243,7 +243,7 @@ class LlmManager:
                         'max_token': self.tool_configs['openai'].get('max_token', 3000),
                     }
             else:
-                print("OpenAI API key not found")
+                logger.warning("OpenAI API key not found")
 
     def _init_groq_config(self):
         if self.tool_configs['groq']['use']:
@@ -259,7 +259,7 @@ class LlmManager:
                         'max_token': self.tool_configs['groq'].get('max_token', 3000),
                     }
             else:
-                print("Groq API key not found")
+                logger.error("Groq API key not found")
 
     def _token_ceiling(self, text: str, llm_model: str = 'gpt-3.5-turbo') -> str:
         """
@@ -285,7 +285,7 @@ class LlmManager:
         encoding = tiktoken.get_encoding(enc.name)
         tokenslist = encoding.encode(text)
         if len(tokenslist)>max_token:
-            print("token ceiling invoked")
+            logger.info("token ceiling invoked")
             return encoding.decode(tokenslist[:max_token])
         else:
             return text
@@ -488,7 +488,7 @@ class WebScraper:
             return content
 
         except requests.exceptions.RequestException as e:
-            print(f"Error extracting content from '{url}': {e}")
+            logger.error(f"Error extracting content from '{url}': {e}")
             return "Crawling failed"
     
 class OxyLabsManager():
@@ -642,9 +642,9 @@ class OxyLabsManager():
                     }
                     results.append(processed_review)
             except KeyError as e:
-                print(f"KeyError: {e}. Skipping this result set.")
+                logger.error(f"KeyError: {e}. Skipping this result set.")
             except Exception as e:
-                print(f"An unexpected error occurred: {e}. Skipping this result set.")
+                logger.error(f"An unexpected error occurred: {e}. Skipping this result set.")
 
     def web_crawler(self, url, **kwargs):
 
@@ -703,7 +703,7 @@ class OxyLabsManager():
         if last_years > 0:
             payload['context'].append({'key': 'tbs', 'value': f"qdr:y{kwargs['last_years']}"})
 
-        print (f"sending payload: \n{payload}")
+        logger.info(f"sending payload: \n{payload}")
                
 
         response = self._post_oxylab_request(payload)
@@ -773,28 +773,28 @@ class OxyLabsManager():
             while retry_count < max_retries:
                 try:
                     page_results = self.serp_crawler(query, **current_kwargs)
-                    print(f"Fetched pages {start_page} to {start_page + pages_to_fetch - 1}")
-                    print(f"Received {len(page_results)} results")
+                    logger.info(f"Fetched pages {start_page} to {start_page + pages_to_fetch - 1}")
+                    logger.info(f"Received {len(page_results)} results")
                     break
                 except RetryableError as e:
                     retry_count += 1
                     if retry_count < max_retries:
-                        print(f"Retryable error occurred: {str(e)}. Retrying in 5 seconds... ({retry_count}/{max_retries})")
+                        logger.warning(f"Retryable error occurred: {str(e)}. Retrying in 5 seconds... ({retry_count}/{max_retries})")
                         """if status_bar:
                             status_text.text(f"Retrying... ({retry_count}/{max_retries})")"""
                         sleep(5)
                     else:
-                        print(f"Max retries reached for retryable error: {str(e)}")
+                        logger.error(f"Max retries reached for retryable error: {str(e)}")
                         page_results = []
                 except SkippableError as e:
-                    print(f"Skippable error occurred: {str(e)}. Skipping pages {start_page} to {start_page + pages_to_fetch - 1}.")
+                    logger.error(f"Skippable error occurred: {str(e)}. Skipping pages {start_page} to {start_page + pages_to_fetch - 1}.")
                     page_results = []
                     break
                 except StopProcessingError:
                     """if status_bar:
                         status_text.text("Error: Stopped processing")
                         progress_bar.progress(1.0)"""
-                    print("Processing was stopped due to a StopProcessingError.")
+                    logger.error("Processing was stopped due to a StopProcessingError.")
                     raise
 
             if not page_results:
@@ -805,7 +805,7 @@ class OxyLabsManager():
                 total_results_number = page_results[0].get('total_results_number', actual_num_results)
                 if total_results_number < actual_num_results:
                     actual_num_results = total_results_number
-                    print(f"Adjusted target to {actual_num_results} based on total_results_number")
+                    logger.info(f"Adjusted target to {actual_num_results} based on total_results_number")
                 actual_results_per_page = len(page_results) / pages_to_fetch if pages_to_fetch > 0 else 0
                 if actual_results_per_page > 0:
                     min_results_per_page = max(int(actual_results_per_page), 1)  # Ensure at least 1
@@ -815,7 +815,7 @@ class OxyLabsManager():
             results.extend(page_results)
 
             if len(results) >= actual_num_results:
-                print(f"Terminating: Collected {len(results)} results (target: {actual_num_results})")
+                logger.info(f"Terminating: Collected {len(results)} results (target: {actual_num_results})")
                 break
 
             # Increment start_page for the next batch

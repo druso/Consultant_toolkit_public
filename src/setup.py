@@ -37,7 +37,7 @@ def load_config(file_name, handle_env_vars=True):
 
         return yaml.safe_load(yaml_content)
     except FileNotFoundError:
-        print(f"Configuration file {file_name} not found.")
+        logger.warning(f"Configuration file {file_name} not found.")
         return {}
     
 
@@ -46,7 +46,7 @@ def scheduler_setup():
     folder = tool_config.get('shared_folder', 'shared')  
     os.makedirs(folder, exist_ok=True)
     setup_logging()
-    print ("scheduler started")
+    logger.info ("scheduler started")
     return tool_config   
 
 
