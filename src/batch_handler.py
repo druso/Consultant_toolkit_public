@@ -185,7 +185,8 @@ class BatchManager(FolderSetupMixin):
         batches_constructor = DfBatchesConstructor(df_processor, session_logger)
 
         try:
-            total_rows = df_processor.processed_df[job_payload.query_column].notna().sum()
+            #total_rows = df_processor.processed_df[job_payload.query_column].notna().sum()
+            total_rows = len(df_processor.processed_df)
             current_payload_filename = payload_filename
             self.batch_summary_logger.update_batch_summary(job_payload, status="WIP", total_rows=total_rows)
             current_payload_filename = self.batch_summary_logger.update_payload_status(current_payload_filename, "WIP")
@@ -197,26 +198,28 @@ class BatchManager(FolderSetupMixin):
                 query_column=job_payload.query_column, 
                 **job_payload.kwargs
             ):
-                if progress["df"] is None and not progress["progress_saved"]:
-                    #standard progress received
-                    pass
-                
-                if progress["df"] is None and progress["progress_saved"]:
-                    #progress file saved but process ongoing
-                    if self.check_batch_stop(job_payload, payload_filename, "WIP"):
-                        return None
-                    current_percentage = (progress["processed_count"] / total_rows) * 100
-                    status = int(current_percentage)
-                    self.batch_summary_logger.update_wip_progress(job_payload.user_id, job_payload.batch_id, status)
-                    logging.info(f"updated processing status")
-
-                elif progress["df"] is not None:
+                if progress["df"] is not None:
                     #progress completed
                     self.batch_summary_logger.update_wip_progress(job_payload.user_id, job_payload.batch_id, 100)
                     completed_filename = self.batch_summary_logger.update_payload_status(current_payload_filename, "COMPLETED")
                     self.batch_summary_logger.update_batch_summary(job_payload, status="COMPLETED", filename=completed_filename)
                     
                     logging.info(f"Ended processing executing function")
+                    
+                elif progress["progress_saved"]:
+                    logger.warning(f"Standard progress saved progress = {progress['processed_count']}")
+                    #progress file saved but process ongoing
+                    if self.check_batch_stop(job_payload, payload_filename, "WIP"):
+                        return None
+                    current_percentage = (progress["processed_count"] / total_rows) * 100
+                    status = int(current_percentage)
+                    self.batch_summary_logger.update_wip_progress(job_payload.user_id, job_payload.batch_id, status)
+                    
+
+                else:
+                    #standard progress received
+                    pass
+
                     
         except Exception as e:
             logging.error(f"An error occurred: {str(e)}")

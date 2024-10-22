@@ -791,6 +791,12 @@ class streamlit_batches_status():
         col2.metric("Wip Batches", len(self.wip_batches))
         col3.metric("Pending Batches", len(self.pending_batches))
 
+    def display_batches_data(self):
+        # Display the DataFrame
+        st.write("### Batches Data")
+        st.write("Overview of all batches:")
+        columns_to_display = ['batch_id', 'status', 'input_file', 'session_id', 'function', 'schedule_time']  
+        st.dataframe(self.batches_df[columns_to_display], hide_index=True, use_container_width=True, height=160)
 
     def display_wip_batches_progress(self):
         st.write("### Wip Batches Progress")
@@ -812,12 +818,6 @@ class streamlit_batches_status():
     
 
 
-    def display_batches_data(self):
-        # Display the DataFrame
-        st.write("### Batches Data")
-        st.write("Overview of all batches:")
-        columns_to_display = ['batch_id', 'status', 'input_file', 'session_id', 'function', 'schedule_time']  
-        st.dataframe(self.batches_df[columns_to_display], hide_index=True, use_container_width=True, height=300)
 
     def download_data_interface(self):
         st.write("### Download Completed Batches")
