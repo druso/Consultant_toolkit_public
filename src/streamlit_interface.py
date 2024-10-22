@@ -710,7 +710,7 @@ def sync_streamlit_processed_df(df_processor:DataFrameProcessor):
 
 def dataframe_streamlit_handler(df_processor:DataFrameProcessor):
         
-        if 'processed_df' not in st.session_state:
+        if 'processed_df' not in st.session_state or st.session_state['processed_df'] is None:
             st.session_state['processed_df'] = df_processor.processed_df
         if 'available_columns' not in st.session_state:
             st.session_state['available_columns'] = df_processor.processed_df.columns.tolist()
@@ -792,7 +792,6 @@ class streamlit_batches_status():
         col3.metric("Pending Batches", len(self.pending_batches))
 
 
-
     def display_wip_batches_progress(self):
         st.write("### Wip Batches Progress")
         
@@ -812,12 +811,13 @@ class streamlit_batches_status():
                 st.progress(progress / 100)  
     
 
+
     def display_batches_data(self):
         # Display the DataFrame
         st.write("### Batches Data")
         st.write("Overview of all batches:")
         columns_to_display = ['batch_id', 'status', 'input_file', 'session_id', 'function', 'schedule_time']  
-        st.dataframe(self.batches_df[columns_to_display], hide_index=True, use_container_width=True)
+        st.dataframe(self.batches_df[columns_to_display], hide_index=True, use_container_width=True, height=300)
 
     def download_data_interface(self):
         st.write("### Download Completed Batches")
@@ -862,6 +862,8 @@ class streamlit_batches_status():
             st.info("No completed batches available for download.")
 
 
+
+
     def stop_batch_interface(self):
         st.write("### Stop Batches")
         st.write("Select a batch to post a stop request:")
@@ -869,28 +871,52 @@ class streamlit_batches_status():
         if not self.pending_batches.empty or not self.wip_batches.empty:
             stoppable_batches = pd.concat([self.pending_batches, self.wip_batches])
             filenames = stoppable_batches['filename'].tolist()
-            default_filename = st.session_state.get('selected_filename', filenames[0])
-
-            selected_filename = st.selectbox(
-                "Select a batch to stop:",
-                options=filenames,
-                index=filenames.index(default_filename),
-                key='selected_filename'
-            )
-
-            if selected_filename:
-                selected_row = stoppable_batches[stoppable_batches['filename'] == selected_filename].iloc[0]
-                if st.button("Stop batch", use_container_width=True):
-                    try:    
-                        self.batch_summary_logger.post_stop_request(selected_row['user_id'], selected_row['batch_id'])
-                    except ValueError as e:
-                        st.error(e)
+            
+            # Safely retrieve the default filename
+            default_filename = st.session_state.get('selected_filename', filenames[0] if filenames else None)
+            
+            # Check if the default_filename exists in filenames
+            if default_filename not in filenames:
+                default_filename = filenames[0] if filenames else None
+                st.session_state['selected_filename'] = default_filename  # Update session state accordingly
+            
+            if filenames:
+                try:
+                    selected_filename = st.selectbox(
+                        "Select a batch to stop:",
+                        options=filenames,
+                        index=filenames.index(default_filename) if default_filename else 0,
+                        key='selected_filename'
+                    )
+                except ValueError as e:
+                    st.error(f"Error selecting batch: {str(e)}")
+                    st.error(f"Available filenames: {filenames}")
+                    st.error(f"Default filename: {default_filename}")
+                    selected_filename = None
+                
+                if selected_filename:
+                    selected_row = stoppable_batches[stoppable_batches['filename'] == selected_filename].iloc[0]
+                    if st.button("Stop batch", use_container_width=True):
+                        try:    
+                            self.batch_summary_logger.post_stop_request(selected_row['user_id'], selected_row['batch_id'])
+                            st.success(f"Stop request sent for batch: {selected_filename}")
+                        except ValueError as e:
+                            st.error(e)
+            else:
+                st.info("No batches available to stop.")
         else:
             st.info("No batches to stop")
         
-        st.write("Pending Stop Requests:")
+        st.write("### Pending Stop Requests:")
         pending_stop_requests = self.batch_summary_logger.check_stop_requests()
-        if pending_stop_requests:
-            st.dataframe(pending_stop_requests, hide_index=True, use_container_width=True)
+        
+        if pending_stop_requests:  # This checks if the list is not empty
+            try:
+                # Convert the list to a DataFrame for better display
+                pending_stop_requests_df = pd.DataFrame(pending_stop_requests)
+                st.dataframe(pending_stop_requests_df, hide_index=True, use_container_width=True)
+            except Exception as e:
+                st.error(f"Error displaying pending stop requests: {str(e)}")
+                st.write(pending_stop_requests)  # Fallback to plain list display
         else:
             st.info("No pending stop requests")

@@ -198,9 +198,11 @@ class BatchManager(FolderSetupMixin):
                 **job_payload.kwargs
             ):
                 if progress["df"] is None and not progress["progress_saved"]:
+                    #standard progress received
                     pass
                 
                 if progress["df"] is None and progress["progress_saved"]:
+                    #progress file saved but process ongoing
                     if self.check_batch_stop(job_payload, payload_filename, "WIP"):
                         return None
                     current_percentage = (progress["processed_count"] / total_rows) * 100
@@ -209,6 +211,7 @@ class BatchManager(FolderSetupMixin):
                     logging.info(f"updated processing status")
 
                 elif progress["df"] is not None:
+                    #progress completed
                     self.batch_summary_logger.update_wip_progress(job_payload.user_id, job_payload.batch_id, 100)
                     completed_filename = self.batch_summary_logger.update_payload_status(current_payload_filename, "COMPLETED")
                     self.batch_summary_logger.update_batch_summary(job_payload, status="COMPLETED", filename=completed_filename)

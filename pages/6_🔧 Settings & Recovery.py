@@ -25,7 +25,7 @@ if st.session_state["authentication_status"]:
     credential_manager = st.session_state['credential_manager']
 
 
-    st.title("API Keys Settings")#########################################################################################
+    st.title("API Keys Settings") #########################################################################################
     services_list = credential_manager.get_services_list()
     os_uninitialized_services = [service for service in services_list if service['initialized'] != "os"]
     
@@ -41,7 +41,7 @@ if st.session_state["authentication_status"]:
 
 
 
-    st.title("Setup Assistant")#########################################################################################
+    st.title("Setup Assistant") #########################################################################################
     st.write("If you don't have any assistant available in My Assistants, generate it here")
     if st.button("Generate the openai assistant"):
         openai = openai_advanced_uses(session_logger)
@@ -56,7 +56,7 @@ if st.session_state["authentication_status"]:
     st.divider()
 
 
-    st.title("Session Recovery")#########################################################################################
+    st.title("Session Recovery") #########################################################################################
 
     st.write("""Something broke along the way? 
             Something messed up the operations? 
@@ -87,7 +87,7 @@ if st.session_state["authentication_status"]:
         )
     
     st.divider()
-    st.title("Purge user data")#########################################################################################
+    st.title("Purge user data") #########################################################################################
     purge_user_data_password = st.session_state['tool_config'].get('purge_user_data_password')
     password = st.text_input('Provide the password to purge the logs folder', type='password') if purge_user_data_password else None
 

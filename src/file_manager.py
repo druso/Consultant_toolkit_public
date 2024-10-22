@@ -729,7 +729,7 @@ class BatchSummaryLogger(FolderSetupMixin):
         Creates or updates an empty file with a name that reflects the batch progress.
         """
         if not 0 <= wip_percentage <= 100:
-            raise ValueError("Progress must be between 0 and 100")
+            raise ValueError(f"Progress must be between 0 and 100. Got {wip_percentage}")
         
         for existing_file in os.listdir(self.wip_folder):
             if existing_file.startswith(f"{user_id}_{batch_id}_"):
@@ -792,7 +792,6 @@ class BatchSummaryLogger(FolderSetupMixin):
         except Exception as e:
             logger.error(f"Error updating payload status: {str(e)}")
             return payload_filename
-
 
 
 class OpenaiThreadLogger(FolderSetupMixin) :

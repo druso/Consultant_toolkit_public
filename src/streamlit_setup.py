@@ -82,8 +82,6 @@ def page_footer():
     st.write("[OpenAI EU Terms of Use](https://openai.com/policies/eu-terms-of-use)")
     st.write("[Groq Terms of Use](https://wow.groq.com/terms-of-use/)")
 
-
-
 def configure_llm_streamlit(llm_manager, LLMManager, session_logger):
 
     # Initialize a temporary LlmManager to get available configurations
@@ -118,6 +116,7 @@ class DataLoader:
                      'handler': None, 
                      'default':""}
         }
+        
 
         if config_key not in self.configurations:
             raise ValueError("Invalid configuration key.")
@@ -126,6 +125,7 @@ class DataLoader:
         self.handler = self.configurations[config_key]['handler']
         self.default = self.configurations[config_key]['default']
         self.accept_multiple_files =  self.configurations[config_key].get('accept_multiple_file', False)
+
         uploaded_file = st.sidebar.file_uploader("Choose a file", type=self.file_types, accept_multiple_files=self.accept_multiple_files)
         if uploaded_file:
             self.user_file = self.load_user_file(uploaded_file)
@@ -134,6 +134,8 @@ class DataLoader:
         else:
             self.user_file = None
             self.content = self.default
+            if 'processed_df' in st.session_state:
+                st.session_state['processed_df'] = None
             st.write ("## Upload a file using the widget in the sidebar to start")
             
     def _dataframe_handler(self, uploaded_file) -> pd.DataFrame:
