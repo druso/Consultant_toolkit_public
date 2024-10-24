@@ -53,9 +53,22 @@ def scheduler_setup():
 
 
 class CredentialManager:
-    def __init__(self, tool_config, use_streamlit=True):
+    def __init__(self, tool_config):
         self.tool_config = tool_config
         self.services_list = self.load_services_config()
+
+
+    def __enter__(self):
+        #
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        # 
+        self.close()
+
+    def close(self):
+        # 
+        pass
         
 
 

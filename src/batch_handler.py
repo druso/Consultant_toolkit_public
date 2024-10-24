@@ -123,10 +123,25 @@ class BatchManager(FolderSetupMixin):
         self.tool_config = tool_config
         self.batch_summary_logger = BatchSummaryLogger(self.tool_config)
 
+    def __enter__(self):
+        #
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        #
+        self.close()
+
+    def close(self):
+        # 
+        pass
+
     def load_payload(self, payload_filename) -> BatchRequestPayload:
+        logger.info(f"Attempting to load payload from: {payload_filename}")
         file_path = os.path.join(self.batches_folder, payload_filename)
+        logger.info(f"filepath: {file_path}")
         file_content = FileLockManager(file_path).secure_read()
         data = json.loads(file_content)
+        logger.info(f"Payload loaded successfully")
         return BatchRequestPayload.from_dict(data)
 
     def dataframe_loader(self, filepath) -> pd.DataFrame:
@@ -141,6 +156,7 @@ class BatchManager(FolderSetupMixin):
     def execute_job(self,payload_filename, credential_manager):
 
         try:
+            logger.info(f"Attempting to load payload: {payload_filename}")
             job_payload = self.load_payload(payload_filename)
         except Exception as e:
             logger.error(f"Failed to load payload: {e}")
