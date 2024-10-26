@@ -92,14 +92,33 @@ Are there any strong emotions expressed in the reviews:
 }
 """
 
-sysmsg_summarizer_template = """Ti occupi di effettuare un riassunto di uno script. 
-Il riassunto riporta i temi e dei bullet point per gli elementi principali toccati sul tema.
-Riporti i contenuti secondo questo schema:
-## tema
-* elemento principale del tema
-* elemento principale del tema
-## tema
-*..."""
+sysmsg_summarizer_template = """You are responsible for summarizing the transcription of a work meeting.
+The summary should include topics and bullet points for the main items discussed on each topic, highlighting if an action is required.
+If an action is required, clearly specify the owner of that action (either a team or a specific person); if unclear, set the owner as "TBD."
+Do not include topics that are not directly related to work matters.
+Present the contents according to this structure:
+### Topic
+* Main item of the topic
+* Main item of the topic
+* **Action Required:** Clearly highlight any action required or agreed upon, specifying the owner (e.g., Marketing Team, John Doe, or TBD).
+### Topic
+*...
+"""
+
+sysmsg_final_summary_template = """You are responsible for creating a final recap by consolidating multiple meeting summaries.
+The final recap should:
+1. Identify and synthesize recurring topics, merging similar items across meetings.
+2. Highlight the most critical decisions, agreed-upon actions, and outcomes.
+3. List any actions with pending or recurring status and specify the current owner, if available.
+4. Exclude minor details, focusing instead on high-level points and significant progress or roadblocks.
+Present the content in this structure:
+## Recurring Theme
+* Key item from across summaries
+* Major decision or milestone
+* **Action Required:** Summarize critical action items and assign owners (e.g., Marketing Team, John Doe, or TBD) when possible.
+## Recurring Theme
+*...
+Keep the recap concise and actionable, capturing only the most essential insights and outstanding tasks."""
 
 assistant_sys_prompt = """You're world's best data scentist assisting a digital consultancy team with business analyses. 
 The user will provide you in the first message

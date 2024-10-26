@@ -2,8 +2,10 @@ tests.ipynb
 tests.py
 test.py
 logs
+shared
 users.yaml
 LICENSE
+shared
 
 # File created using '.gitignore Generator' for Visual Studio Code: https://bit.ly/vscode-gig
 # Created by https://www.toptal.com/developers/gitignore/api/visualstudiocode,linux,python,venv

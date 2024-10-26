@@ -1,7 +1,10 @@
-from src.prompts import sysmsg_keyword_categorizer,sysmsg_review_analyst_template, sysmsg_summarizer_template
+from src.prompts import sysmsg_keyword_categorizer,sysmsg_review_analyst_template, sysmsg_summarizer_template,sysmsg_final_summary_template
 
-from src.external_tools import LlmManager, StopProcessingError, RetryableError, SkippableError, openai_advanced_uses
-from src.file_manager import DataFrameProcessor
+
+from src.external_tools import LlmManager, StopProcessingError, RetryableError, SkippableError, openai_advanced_uses, AudioTranscribe
+from streamlit_autorefresh import st_autorefresh
+from src.file_manager import DataFrameProcessor, SessionLogger, OpenaiThreadLogger, BatchRequestLogger, BatchSummaryLogger
+from src.batch_handler import DfBatchesConstructor
 import streamlit as st
 import pandas as pd
 import tiktoken
@@ -27,15 +30,17 @@ from openai.types.beta.threads.runs.code_interpreter_tool_call import (
     CodeInterpreterOutputLogs
     )
 
-    
+
 class DfRequestConstructor():
-    def __init__(self, df_processor:DataFrameProcessor, app_logger=None):
+    def __init__(self, df_processor:DataFrameProcessor, session_logger:SessionLogger=None):
         """
-        Initialize the request constructor, by providing it the df
+        Initialize the streamlit df request constructor
         """
 
         self.df_processor = df_processor
-        self.app_logger = app_logger
+        self.session_logger = session_logger
+        self.batch_request_logger = BatchRequestLogger(session_logger.user_id, session_logger.session_id, session_logger.tool_config)
+        self.batches_constructor = DfBatchesConstructor(df_processor, session_logger)
 
         self.bulk_sys_templates = {
             "Custom Prompt": "",
@@ -45,119 +50,11 @@ class DfRequestConstructor():
         }
             
     
-    def _batch_requests(self, 
-                        func, 
-                        response_column, 
-                        query_column, 
-                        batch_size=0, 
-                        force_string=True, 
-                        max_retries=3, 
-                        retry_delay=1, 
-                        save_interval=10,
-                        progress_bar=True, 
-                        *args, 
-                        **kwargs):
-        """Process DataFrame rows in batches, applying a function (func) and handling errors."""
-
-        def process_row(idx):
-            """Process a single row, handling retries and errors."""
-            for attempt in range(max_retries + 1):
-                try:
-                    value = self.df_processor.processed_df.loc[idx, query_column]
-                    if pd.isna(value) or value is None or str(value).strip() == "":
-                        e="Cannot process empty value"
-                        self.df_processor.processed_df.at[idx, response_column] = e
-                        raise SkippableError(e)
-                    result = func(value, *args, **kwargs)
-                    if force_string:
-                        result = str(result)
-                    self.df_processor.processed_df.at[idx, response_column] = result
-                    break
-                except RetryableError as e:
-                    if attempt < max_retries:
-                        st.warning(f"Error processing row {idx + 1}, retrying (attempt {attempt + 1}/{max_retries}): {e}")
-                        time.sleep(retry_delay)
-                    else:
-                        st.error(f"Retry limit reached for row {idx + 1}. Skipping.")
-                        self.df_processor.processed_df.at[idx, response_column] = f"Error: {e}"
-                except StopProcessingError as e:
-                    st.error(f"Error processing the request: {e}")
-                    return False
-                except SkippableError as e:
-                    st.warning(f"Error processing the request: {e}")
-                    return True
-            return True
-
-        def get_next_batch_indices(start_idx):
-            """Get the next batch of indices to process."""
-            if batch_size == 0:
-                return valid_indices[start_idx:]
-            else:
-                end_idx = min(start_idx + batch_size, len(valid_indices))
-                return valid_indices[start_idx:end_idx]
-
-        # Check if response column exists, create it if not
-        if response_column not in self.df_processor.processed_df.columns:
-            self.df_processor.processed_df[response_column] = pd.NA
-
-        # Create a mask to identify rows that need to be processed (have NaN in the response column)
-        mask = self.df_processor.processed_df[response_column].isna()
-        valid_indices = self.df_processor.processed_df[mask].index
-
-        # Find the first valid index to start processing
-        start_idx = 0
-
-        processed_count = 0  # Track the number of processed rows
-
-        # Process the batch if there are rows to process
-        while start_idx < len(valid_indices):
-            batch_indices = get_next_batch_indices(start_idx)
-            if progress_bar:
-                my_bar = st.progress(0, text="Prepearing the operation")
-                batch_size = len(batch_indices)
-                i=0
-            for idx in batch_indices:
-                i=i+1
-                if not process_row(idx):
-                    return self.df_processor.processed_df  # Stop processing if StopProcessingError occurs
-                
-                if progress_bar:
-                    progress_percent = int(i / batch_size * 100)
-                    my_bar.progress(progress_percent, text=f"Processing batch... {i}/{batch_size}")
-                
-                # Update progress bar after each row
-                processed_count += 1
-                if processed_count % save_interval == 0:
-                    self.app_logger.log_excel(self.df_processor.processed_df, version="processing")  # Save periodically
-
-                # Check if we have processed the specified batch size
-                if batch_size > 0 and processed_count >= batch_size:
-                    st.toast(f'Processed {processed_count} rows. Ready to process a new batch.')
-                    self.app_logger.log_excel(self.df_processor.processed_df, version="processing")
-                    if progress_bar:
-                        my_bar.empty()
-                    return self.df_processor.processed_df
-            
-            start_idx += len(batch_indices)
-            if progress_bar:
-                my_bar.empty()
-            if len(batch_indices) < batch_size:
-                break  # Break if the batch was smaller than batch_size
-
-        # Final save after processing
-        self.app_logger.log_excel(self.df_processor.processed_df, version="processing")
-        
-        if start_idx >= len(valid_indices):
-            st.success('Processing complete! All rows have been processed.')
-
-        return self.df_processor.processed_df
-
-
     def _base_batch_streamlit(self,function,function_ready=True, query_name="query_name", response_name="response_name", function_name="function_name", config_package=None,**kwargs):
         
         if config_package:
     
-                self._batch_requests(function, 
+                self.batches_constructor.df_batches_handler(function, 
                                     batch_size=config_package.get('batch_size', 0), 
                                     response_column=config_package.get('response_column', 'response'), 
                                     query_column=config_package.get('query_column'), 
@@ -165,15 +62,15 @@ class DfRequestConstructor():
                                     )
 
         else:
-            default_value='Select a column...'
+            default_query_value='Select a column...'
             query_column = st.selectbox(f"Select columns use as {query_name}", 
-                                        options=[default_value] + self.df_processor.processed_df.columns.tolist(), help="This is the input colum. Each row will be processed through the function")
-            batch_size = st.number_input(f"{function_name} requests batch size",min_value=0,max_value=200,step=1,value=5, help="Here you set how many rows to process with a click. Set 0 to run the whole file")
+                                        options=[default_query_value] + self.df_processor.processed_df.columns.tolist(), help="This is the input colum. Each row will be processed through the function")
+            batch_size = st.number_input(f"{function_name} requests test batch size",min_value=1,max_value=10,step=1,value=3, help="Here you set how many rows to process with a click.")
             response_column = st.text_input(f"{response_name} Column Name",response_name, help="The response from the function will be stored in a column with the name you provide here")
             if query_column == response_column:
                 st.warning("*You should select a different column for the response than what you're using as the input or you'll get into a paradox*")
                 waiting_input=True
-            elif query_column == default_value:
+            elif query_column == default_query_value:
                 st.warning("*No column selected. Please choose a column.*")
                 waiting_input=True
             elif not function_ready:
@@ -181,15 +78,45 @@ class DfRequestConstructor():
                 waiting_input=True 
             else:
                 waiting_input=False
-                
-            if st.button(f"Run a {function_name} batch", use_container_width=True, disabled=waiting_input):
-                    self._batch_requests(function, 
-                                        batch_size=batch_size, 
-                                        response_column=response_column, 
-                                        query_column=query_column, 
-                                        **kwargs
-                                        )
-        
+            
+            #############TEST BATCH RUN################
+            if st.button(f"Run a {function_name} test batch", use_container_width=True, disabled=waiting_input):
+                progress_bar = st.progress(0, text="Preparing the operation")
+                df=self.df_processor.processed_df
+                total_to_process = batch_size if batch_size > 0 else len(df[df[response_column].isna()].index)
+                try:
+                    for progress in self.batches_constructor.df_batches_handler(
+                        func=function, 
+                        response_column=response_column, 
+                        query_column=query_column, 
+                        batch_size=batch_size, 
+                        **kwargs
+                    ):
+                        if progress["df"] is None:
+                            processed_count =progress["processed_count"]
+                            if processed_count > batch_size:
+                                processed_count=batch_size
+                            progress_bar.progress(int(processed_count / batch_size * 100), text=f"Processing... {processed_count}/{total_to_process}")
+                        else:
+                            progress_bar.empty()
+                            st.toast("Processing complete. Check the results below")
+                except Exception as e:
+                    st.error(f"An error occurred: {str(e)}")
+
+            #############FULL FILE RUN################      
+            if st.button(f"Run {function_name} on the whole file", use_container_width=True, disabled=waiting_input):
+                if query_column == default_query_value:
+                    st.warning("*No column selected. Please choose a column.*")
+                else:
+                    self.batch_request_logger.post_scheduler_request(
+                                                    df=self.df_processor.processed_df,
+                                                    session_logger=self.session_logger,
+                                                    function=function, 
+                                                    query_column=query_column, 
+                                                    response_column=response_column, 
+                                                    kwargs=kwargs
+                                                    )
+                    st.toast("Request sent to the scheduler", icon='🚀')
     
     def llm_request_single_column(self, llm_manager, config_package=None):
         if config_package:
@@ -217,7 +144,10 @@ class DfRequestConstructor():
                 query_name="Content to LLM", 
                 response_name="LLM Response",
                 function_name="LLM",
-                sys_msg=sys_msg)
+                sys_msg=sys_msg,
+                llm_temp=llm_manager.llm_temp,
+                llm_model=llm_manager.model
+                )
         return self.df_processor
 
 
@@ -273,7 +203,8 @@ class DfRequestConstructor():
                                         num_results=num_results,
                                         domain=domain,
                                         last_years=last_years,
-                                        status_bar=True,)
+                                        #status_bar=True,
+                                        )
 
 
         return self.df_processor
@@ -334,6 +265,7 @@ class DfRequestConstructor():
 
     
     def df_handler(self):
+        st.write("### Table Handler")
         available_columns = st.session_state['available_columns']
         tabs = st.tabs(["Unroll", "Drop", "Merge", "Add", "Rename", "Parse"])
         #column unroller
@@ -344,9 +276,8 @@ class DfRequestConstructor():
                                             options=available_columns,
                                             help="The column where you have structured content that needs to be unrolled")
             if st.button("expand column objects"):
-                self.app_logger.log_excel(self.df_processor.processed_df,version="before_unrolling")
+                self.session_logger.log_excel(self.df_processor.processed_df,version="before_unrolling")
                 self.df_processor.unroll_json(expander_msg_column)
-                self.df_processor.update_columns_list()
 
 
         #column drop
@@ -356,7 +287,6 @@ class DfRequestConstructor():
             st.write (f"You do know that by pressing this you will erase the columns {columns_to_drop} forever, right?")
             if st.button("Yes, Drop Them!", type="primary"):
                 self.df_processor.processed_df=self.df_processor.processed_df.drop(columns=columns_to_drop, errors='ignore')
-                self.df_processor.update_columns_list()
 
         #column merge
         with tabs[2]:
@@ -368,7 +298,6 @@ class DfRequestConstructor():
                 self.df_processor.processed_df[new_column_name] = self.df_processor.processed_df[columns_to_merge].apply(
                     lambda x: separator.join(x.astype(str)), axis=1
                 )
-                self.df_processor.update_columns_list()
 
 
         #column add
@@ -378,7 +307,6 @@ class DfRequestConstructor():
             new_column_name = st.text_input("New Column_Name")
             if st.button("Generate new column!", type="primary"):
                 self.df_processor.processed_df[new_column_name] = new_column_content
-                self.df_processor.update_columns_list()
 
 
         #column rename
@@ -390,7 +318,7 @@ class DfRequestConstructor():
                 if column_to_rename and new_column_name:
                     self.df_processor.processed_df = self.df_processor.processed_df.rename(columns={column_to_rename: new_column_name})
                     st.success(f"Column '{column_to_rename}' has been renamed to '{new_column_name}'")
-                    self.df_processor.update_columns_list()
+
                 else:
                     st.warning("Please select a column and provide a new name")
 
@@ -404,7 +332,7 @@ class DfRequestConstructor():
                 original_type = self.df_processor.get_data_type(column_to_parse)
                 self.df_processor.parse_column(column_to_parse, expected_type)
                 new_type = self.df_processor.get_data_type(column_to_parse)
-                self.df_processor.update_columns_list()
+
                 
                 if original_type != new_type:
                     st.success(f"Column '{column_to_parse}' has been parsed from {original_type} to {new_type}")
@@ -429,9 +357,8 @@ class DfRequestConstructor():
             column_summary = self.df_processor.generate_column_summary(df)
             st.dataframe(column_summary, use_container_width=True)
         
-        self.df_processor.update_columns_list()
-        return self.df_processor
 
+        return self.df_processor
 
     
 class SingleRequestConstructor():
@@ -441,28 +368,91 @@ class SingleRequestConstructor():
         """
         pass
 
-    def llm_summarize(self,text, llm_manager:LlmManager):
+    def audio_transcribe(self,audio_file, audio_transcriber:AudioTranscribe): 
+
+        transcribe_button_disabled = True
+        if audio_file:
+            transcribe_button_disabled = False
+        api_choice = st.selectbox("Select the API", options=["OpenAI", "Groq"])
+        if api_choice == "OpenAI":
+            function = audio_transcriber.whisper_openai_transcribe
+        else:
+            function = audio_transcriber.whisper_groq_transcribe
+
+        transcript = ""
+        if st.button("Transcribe!", use_container_width=True, type="primary", disabled=transcribe_button_disabled):
+            transcript = function(audio_file)
+        if transcribe_button_disabled:
+            st.warning("Upload an audio file on the sidebar to be able to transcribe it")
+        return transcript
+
+    def llm_summarize(self, text, llm_manager: LlmManager):
+    
+        summarize_button_disabled = True
+        if text is not None and len(text) >= 200:
+            summarize_button_disabled = False
+    
+        with st.expander("Advanced Options"):      
+            st.write("In doing the summarization the full transcript gets chopped into chunks:")
+            chunk_length = st.slider("Chunk length (in tokens)", min_value=0, max_value=3200, value=1600, step=1)
+            chunk_overlap = st.slider("Chunk overlap (in tokens)", min_value=0, max_value=320, value=160, step=1)
+            sys_msg = st.text_area("Summarizer Prompt", value=sysmsg_summarizer_template, height=200)
+            final_summarization = st.checkbox("Final summarization", value=True)
+            if final_summarization:
+                final_sys_msg = st.text_area("Final Summarization Prompt", value=sysmsg_final_summary_template, height=200)
+    
+        summarized_transcript = ""
         
-        st.write("In doing the summarization the full transcript gets chopped into chunks:")
-        chunk_length = st.slider("Chunk lenght (in tokens)", min_value=0,max_value=1600,value=800,step=1)
-        chunk_overlap = st.slider("Chunk overlap (in tokens)", min_value=0,max_value=160, value=80 ,step=1)
-        with st.expander:
-            sys_msg = st.text_area("Summarizer Prompt", value=st.session_state['app_configs']['system_message'], height=200)
-        
-        if st.button("Summarize!", use_container_width=True, type="primary"):
+        if st.button("Summarize!", use_container_width=True, type="primary", disabled=summarize_button_disabled):
             with st.spinner(' 🔄 Summarizing...'):
                 chunks_list = TextEmbeddingsProcessors().text_token_chunker(text, chunk_length, chunk_overlap)
-                st.toast(f"ready to summarize {len(chunks_list)} chunks", icon='✨')
-                total_tokens = 0
-                chunk_num = 1
+                
+                # Adjust total_chunks to include final summarization if required
+                total_chunks = len(chunks_list) + (1 if final_summarization else 0)
+                
+                # Initialize the progress container
+                progress_container = st.container()
+                
+                # Initialize a dictionary to hold placeholders for each step
+                if 'summarization_placeholders' not in st.session_state:
+                    st.session_state['summarization_placeholders'] = {}
+    
+                # Create a placeholder for the overall progress
+                overall_placeholder = progress_container.empty()
+                overall_placeholder.markdown(f"**Overall Progress:** {0}/{total_chunks} steps completed")
+                progress_bar = progress_container.progress(0)
+    
+                total_requests = 0
                 summarized_transcript = ""
+                
+                # Iterate through each chunk and update progress
                 for chunk_num, chunk in enumerate(chunks_list, start=1):
-                    assistant_response, used_tokens = llm_manager.llm_request(chunk, sys_msg)
-                    summarized_transcript += f"\n\n\n\n# Summary of Chunk {chunk_num}\n\n{assistant_response}"
-                    st.toast(f"Chunk number {chunk_num} summarized using {used_tokens} tokens", icon='⬆️')
-                    total_tokens += used_tokens
-                st.toast(body=f"All chunks summarized using a total of {total_tokens} tokens", icon='🚀')
-                return summarized_transcript 
+                    assistant_response = llm_manager.llm_request(chunk, sys_msg)
+                    summarized_transcript += f"## Summary of Chunk {chunk_num}\n\n{assistant_response}\n\n"
+                    total_requests += 1
+                    
+                    # Update the overall progress bar
+                    progress = int((chunk_num / total_chunks) * 100)
+                    progress_bar.progress(progress)
+                    overall_placeholder.markdown(f"**Overall Progress:** {chunk_num}/{total_chunks} steps completed")
+                
+                # Handle final summarization if required
+                if final_summarization:
+                    assistant_response = llm_manager.llm_request(summarized_transcript, final_sys_msg)
+                    summarized_transcript = f"# -- Final Summary --\n\n{assistant_response} \n\n# -- Detailed Summary --\n\n{summarized_transcript}"
+                    total_requests += 1
+                    # Update the progress bar for final summarization
+                    progress = int((total_chunks) / total_chunks * 100)
+                    progress_bar.progress(progress)
+                    overall_placeholder.markdown(f"**Overall Progress:** {total_chunks}/{total_chunks} steps completed")
+
+                # Final update to the progress bar
+                progress_bar.progress(100)
+                overall_placeholder.markdown(f"**Overall Progress:** {total_chunks}/{total_chunks} steps completed")
+                
+                st.success(f"All chunks summarized using a total of {total_requests} requests")
+                
+        return summarized_transcript 
             
     def text_chunker(self,user_doc,file_name,df=pd.DataFrame()):  
         with st.expander("Chunker options"):
@@ -565,7 +555,7 @@ class TextEmbeddingsProcessors():
 
 class openai_thread_setup():
     def __init__(self, openai_advanced_uses:openai_advanced_uses):
-        self.app_logger = st.session_state["app_logger"]
+        self.session_logger = st.session_state["session_logger"]
         self.openai_advanced_uses = openai_advanced_uses
 
     def __assistant_setup_msg_generator(self, df: pd.DataFrame) -> str:
@@ -579,8 +569,9 @@ class openai_thread_setup():
 
 
     def streamlit_interface(self, df):
-        
-        thread_name = st.text_input("Thread name",self.app_logger.file_name,max_chars=30,help="This is how you can later select the thread in **🤖My Assistants**" )
+                
+        st.write("### Assistant Setup")
+        thread_name = st.text_input("Thread name",self.session_logger.file_name,max_chars=30,help="This is how you can later select the thread in **🤖My Assistants**" )
         
         goals_example="The objective is to uncover how your target audience talks about competing products and brands, revealing their pain points, desires, and preferences. This insight will highlight opportunities for enhancing our product development and refining your communication strategy to better resonate with potential customers."
         goals=st.text_area("Goal of the analysis", goals_example, help="This will help the assistant understanding the broad scope of the analysis", height=200)
@@ -593,7 +584,7 @@ class openai_thread_setup():
         if st.button("Create Thread"):
             #Save and upload the file
             with st.spinner("Uploading the file..."):
-                file_path = self.app_logger.log_excel(df,"assistant", True)
+                file_path = self.session_logger.log_excel(df,"assistant", True)
                 uploaded_file = self.openai_advanced_uses.openai_upload_file(file_path, "assistants")
                 file_id = uploaded_file.id
                 assistant_setup_msg = self.__assistant_setup_msg_generator(df)
@@ -604,12 +595,10 @@ class openai_thread_setup():
                 
             st.write(f"Thread {thread_name} was set up correctly, you can now use it in the **🤖My Assistants** tab")
 
-
-
-
 class assistant_interface():
     def __init__(self, openai_advanced_uses:openai_advanced_uses):
-        self.app_logger = st.session_state["app_logger"]
+        self.session_logger = st.session_state["session_logger"]
+        self.openai_thread_logger = OpenaiThreadLogger(self.session_logger.user_id, self.session_logger.tool_config)
         self.openai_advanced_uses = openai_advanced_uses
         self.unavailable = False
 
@@ -634,11 +623,11 @@ class assistant_interface():
 
 
     def setup_thread(self):
-        thread_ids = self.app_logger.list_openai_threads()
+        thread_ids = self.openai_thread_logger.list_openai_threads()
         if thread_ids:
             selected_thread = st.sidebar.selectbox("Select thread", [name for _, name in thread_ids])
             self.thread_id = next(id for id, name in thread_ids if name == selected_thread)
-            st.session_state['messages'] = self.app_logger.get_thread_history(self.thread_id)
+            st.session_state['messages'] = self.openai_thread_logger.get_thread_history(self.thread_id)
             self.starting_message = f"Ask anything to the thread {selected_thread}"
             self.unavailable = False
         else:
@@ -654,10 +643,13 @@ class assistant_interface():
         if not self.unavailable and st.sidebar.button("reset thread", use_container_width=True):
             self.thread_id = self.openai_advanced_uses.reset_thread(self.thread_id)
             st.session_state['messages'] = []
+            self.st.success(f"New Thread id generated: {self.thread_id}")
+            
 
         if not self.unavailable and st.sidebar.button("erase thread", use_container_width=True):
             self.thread_id = self.openai_advanced_uses.erase_thread(self.thread_id)
             st.session_state['messages'] = []
+            self.st.success(f"Thread data for thread id: {self.thread_id} has been deleted.")
 
         
         
@@ -732,9 +724,9 @@ class assistant_interface():
                                             for output in code_interpreter.outputs:
                                                 image_file_id = output.image.file_id
                                                 image_data = self.openai_advanced_uses.openai_download_file(image_file_id)
-                                                image_folder = f"{self.app_logger.openai_threads_folder}/{self.thread_id}"
+                                                image_folder = f"{self.session_logger.openai_threads_folder}/{self.thread_id}"
                                                 os.makedirs(image_folder, exist_ok=True)
-                                                image_path = f"{self.app_logger.openai_threads_folder}/{self.thread_id}/{image_file_id}.png"
+                                                image_path = f"{self.session_logger.openai_threads_folder}/{self.thread_id}/{image_file_id}.png"
                                                 with open(image_path, "wb") as file:
                                                     file.write(image_data)
 
@@ -753,7 +745,7 @@ class assistant_interface():
                                             with st.status("Results", state="complete"):
                                                 st.code(code_output)
                                     except Exception as e:
-                                        print(f"No outputs from code interpreter: {e}")
+                                        pass
                                     finally:
                                         code_input_expander.update(label="Code", state="complete", expanded=False)
                                 else:
@@ -773,4 +765,221 @@ class assistant_interface():
                             assistant_text_box.markdown(last_output["content"])
                 
             st.session_state['messages'].append({"role": "assistant", "items": assistant_output})
-            self.app_logger.update_thread_history(st.session_state['messages'],self.thread_id)
+            self.openai_thread_logger.update_thread_history(st.session_state['messages'],self.thread_id)
+
+def sync_streamlit_processed_df(df_processor:DataFrameProcessor):
+    st.session_state['processed_df'] = df_processor.processed_df
+    st.session_state['available_columns'] = df_processor.processed_df.columns.tolist()
+
+def dataframe_streamlit_handler(df_processor:DataFrameProcessor):
+        
+        if 'processed_df' not in st.session_state or st.session_state['processed_df'] is None:
+            st.session_state['processed_df'] = df_processor.processed_df
+        if 'available_columns' not in st.session_state:
+            st.session_state['available_columns'] = df_processor.processed_df.columns.tolist()
+        
+        df_processor.processed_df = st.session_state['processed_df']
+
+        if st.sidebar.button("Refresh columns list", use_container_width=True, 
+                                  help="Will force the refresh of the lists of available columns throughout the application"):
+            st.session_state['available_columns'] = df_processor.processed_df.columns.tolist()
+
+        if st.sidebar.button('Restore Processing', use_container_width=True, 
+                            help="Will restore the file to the originally uploaded file"):
+            st.session_state["session_logger"].reinitialize_session_id()
+            st.session_state["session_logger"].log_excel(df_processor.user_df, "original")
+            st.session_state['processed_df'] = df_processor.user_df.copy()
+            st.session_state['available_columns'] = st.session_state['processed_df'].columns.tolist()
+            df_processor.processed_df = st.session_state['processed_df']
+
+        return df_processor
+
+class streamlit_batches_status():
+
+    def __init__(self,  session_logger:SessionLogger):
+        self.session_logger = session_logger
+        self.batch_request_logger = BatchRequestLogger(self.session_logger.user_id,self.session_logger.session_id, self.session_logger.tool_config)  #makes no sense to activate this with session id
+        self.batch_summary_logger = BatchSummaryLogger(self.session_logger.tool_config)
+        self.update_batches_df()
+        if not self.batches_df.empty:
+            self.main_interface()
+
+
+    def update_batches_df(self):
+
+        summary_df = self.batch_request_logger.load_batches_summary()
+        self.batches_df = summary_df
+        if self.batches_df.empty:    
+            st.warning("No batches available")
+            self.batches_df = pd.DataFrame()
+        else:
+            self.batches_df = summary_df[summary_df.get('user_id') == self.batch_request_logger.user_id]
+            column_to_datetime = ['schedule_time', 'start_time', 'end_time']
+            for column_name in column_to_datetime:
+                try:
+                    self.batches_df[column_name] = pd.to_datetime(self.batches_df[column_name])
+                except Exception as e:
+                    st.warning(f"Failed to convert {column_name} to datetime: {str(e)}")
+
+        if not self.batches_df.empty:
+            self.completed_batches = self.batches_df[self.batches_df['status'] == 'COMPLETED'] 
+            self.wip_batches = self.batches_df[self.batches_df['status'] == 'WIP']
+            self.pending_batches = self.batches_df[self.batches_df['status'] == 'PENDING']
+
+    
+    def main_interface(self):
+        count = st_autorefresh(interval=5000, key="main_autorefresh")
+        self.update_batches_df()
+        
+        if self.batches_df.empty:
+            st.warning("No batch data available.")
+            return
+        
+        self.display_batches_recap()
+        self.display_batches_data()
+        tabs = st.tabs(["Check Progress", "Download Data", "Stop Batches"])
+        with tabs[1]: 
+            self.download_data_interface()
+        with tabs[2]:
+            self.stop_batch_interface()
+        with tabs[0]:
+            self.display_wip_batches_progress()
+
+
+    def display_batches_recap(self):
+        # Display recap of batches in the pipeline
+        st.write("### Batches Recap")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Completed Batches", len(self.completed_batches))
+        col2.metric("Wip Batches", len(self.wip_batches))
+        col3.metric("Pending Batches", len(self.pending_batches))
+
+    def display_batches_data(self):
+        # Display the DataFrame
+        st.write("### Batches Data")
+        st.write("Overview of all batches:")
+        columns_to_display = ['batch_id', 'status', 'input_file', 'session_id', 'function', 'schedule_time']  
+        st.dataframe(self.batches_df[columns_to_display], hide_index=True, use_container_width=True, height=160)
+
+    def display_wip_batches_progress(self):
+        st.write("### Wip Batches Progress")
+        
+        if self.wip_batches.empty:
+            st.info("No batches in progress")
+            return
+
+        # Use a placeholder to avoid stacking progress bars on each refresh
+        progress_container = st.container()
+
+        with progress_container:
+            for _, batch in self.wip_batches.iterrows():
+                progress = self.batch_request_logger.read_wip_progress(
+                    batch['user_id'], batch['batch_id']
+                )
+                st.write(f"Progress for {batch['batch_id']} on file {batch['input_file']}: {progress}%")
+                st.progress(progress / 100)  
+    
+
+
+
+    def download_data_interface(self):
+        st.write("### Download Completed Batches")
+        st.write("Select a batch to download a result:")
+        
+        if not self.completed_batches.empty:
+            batch_ids = self.completed_batches['batch_id'].tolist()
+            default_batch_id = st.session_state.get('selected_batch_id', batch_ids[0])
+
+            selected_batch_id = st.selectbox(
+                "Select a completed batch to download:",
+                options=batch_ids,
+                index=batch_ids.index(default_batch_id),
+                key='selected_batch_id'
+            )
+
+            if selected_batch_id:
+                selected_row = self.completed_batches[self.completed_batches['batch_id'] == selected_batch_id].iloc[0]
+                
+                filename = f"processed_{selected_row['input_file']}"
+                output_file_path = os.path.join(
+                    self.batch_request_logger.tool_config['logs_root_folder'], 
+                    self.batch_request_logger.user_id,
+                    "files", 
+                    selected_row['session_id'], 
+                    filename
+                )
+
+                # Check if the output file exists
+                if os.path.isfile(output_file_path):
+                    with open(output_file_path, "rb") as file:
+                        st.download_button(
+                            label="Download Output File",
+                            use_container_width=True,
+                            data=file,
+                            file_name=filename,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                else:
+                    st.warning("Output file not found for the selected batch.")
+        else:
+            st.info("No completed batches available for download.")
+
+
+
+
+    def stop_batch_interface(self):
+        st.write("### Stop Batches")
+        st.write("Select a batch to post a stop request:")
+        
+        if not self.pending_batches.empty or not self.wip_batches.empty:
+            stoppable_batches = pd.concat([self.pending_batches, self.wip_batches])
+            filenames = stoppable_batches['filename'].tolist()
+            
+            # Safely retrieve the default filename
+            default_filename = st.session_state.get('selected_filename', filenames[0] if filenames else None)
+            
+            # Check if the default_filename exists in filenames
+            if default_filename not in filenames:
+                default_filename = filenames[0] if filenames else None
+                st.session_state['selected_filename'] = default_filename  # Update session state accordingly
+            
+            if filenames:
+                try:
+                    selected_filename = st.selectbox(
+                        "Select a batch to stop:",
+                        options=filenames,
+                        index=filenames.index(default_filename) if default_filename else 0,
+                        key='selected_filename'
+                    )
+                except ValueError as e:
+                    st.error(f"Error selecting batch: {str(e)}")
+                    st.error(f"Available filenames: {filenames}")
+                    st.error(f"Default filename: {default_filename}")
+                    selected_filename = None
+                
+                if selected_filename:
+                    selected_row = stoppable_batches[stoppable_batches['filename'] == selected_filename].iloc[0]
+                    if st.button("Stop batch", use_container_width=True):
+                        try:    
+                            self.batch_summary_logger.post_stop_request(selected_row['user_id'], selected_row['batch_id'])
+                            st.success(f"Stop request sent for batch: {selected_filename}")
+                        except ValueError as e:
+                            st.error(e)
+            else:
+                st.info("No batches available to stop.")
+        else:
+            st.info("No batches to stop")
+        
+        st.write("### Pending Stop Requests:")
+        pending_stop_requests = self.batch_summary_logger.check_stop_requests()
+        
+        if pending_stop_requests:  # This checks if the list is not empty
+            try:
+                # Convert the list to a DataFrame for better display
+                pending_stop_requests_df = pd.DataFrame(pending_stop_requests)
+                st.dataframe(pending_stop_requests_df, hide_index=True, use_container_width=True)
+            except Exception as e:
+                st.error(f"Error displaying pending stop requests: {str(e)}")
+                st.write(pending_stop_requests)  # Fallback to plain list display
+        else:
+            st.info("No pending stop requests")

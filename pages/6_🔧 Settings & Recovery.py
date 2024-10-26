@@ -1,6 +1,7 @@
-from src.file_manager import AppLogger
+import logging
+logger = logging.getLogger(__name__)
 from src.external_tools import openai_advanced_uses
-from src.setup import page_setup, page_footer
+from src.streamlit_setup import page_setup, page_footer
 from src.prompts import assistant_sys_prompt
 import streamlit as st
 import os
@@ -20,11 +21,11 @@ def handle_service_credentials(service, credential_manager):
             st.error(f"{service['key']} is not set, related services may not work properly")
 
 if st.session_state["authentication_status"]:
+    session_logger = st.session_state["session_logger"]
     credential_manager = st.session_state['credential_manager']
-    app_logger = AppLogger(st.session_state['username'])
 
 
-    st.title("API Keys Settings")#########################################################################################
+    st.title("API Keys Settings") #########################################################################################
     services_list = credential_manager.get_services_list()
     os_uninitialized_services = [service for service in services_list if service['initialized'] != "os"]
     
@@ -40,10 +41,10 @@ if st.session_state["authentication_status"]:
 
 
 
-    st.title("Setup Assistant")#########################################################################################
+    st.title("Setup Assistant") #########################################################################################
     st.write("If you don't have any assistant available in My Assistants, generate it here")
     if st.button("Generate the openai assistant"):
-        openai = openai_advanced_uses(app_logger)
+        openai = openai_advanced_uses(session_logger)
         assistant_configs=st.session_state['tool_config'].get('assistant_configs')
         assistant_list = openai.list_assistants()
         if any(assistant_configs['assistant_name'] == assistant[1] for assistant in assistant_list):
@@ -55,9 +56,7 @@ if st.session_state["authentication_status"]:
     st.divider()
 
 
-
-
-    st.title("Session Recovery")#########################################################################################
+    st.title("Session Recovery") #########################################################################################
 
     st.write("""Something broke along the way? 
             Something messed up the operations? 
@@ -66,18 +65,18 @@ if st.session_state["authentication_status"]:
             Select your session_id and download the processed files or requests logs. May be able to recover something""")
 
     # List all subfolders in the main directory
-    logs_folder = st.selectbox('Select the type of log', [app_logger.files_folder, app_logger.requests_folder])
+    logs_folder = st.selectbox('Select the type of log', [session_logger.files_folder, session_logger.requests_folder, session_logger.openai_threads_folder])
 
     available_logs = []
     selected_logs_folder = None
 
     if logs_folder:
-        available_logs = app_logger.list_subfolders(logs_folder)
-        selected_logs_folder = st.selectbox('Select a folder', [''] + available_logs)
+        
+        selected_logs_folder = st.selectbox('Select a folder', [''] + os.listdir(logs_folder))
 
     # Create the "Prepare the ZIP" button, disabled if no folder is selected
     if st.button('Prepare the ZIP', type='primary', use_container_width=True, disabled=not selected_logs_folder):
-        zip_file = app_logger.zip_directory(os.path.join(logs_folder, selected_logs_folder))
+        zip_file = session_logger.zip_directory(os.path.join(logs_folder, selected_logs_folder))
         st.download_button(
             label="Download",
             data=zip_file,
@@ -88,14 +87,16 @@ if st.session_state["authentication_status"]:
         )
     
     st.divider()
-    purge_logs_password = st.session_state['tool_config'].get('purge_logs_password')
-    password = st.text_input('Provide the password to purge the logs folder', type='password') if purge_logs_password else None
+    st.title("Purge user data") #########################################################################################
+    purge_user_data_password = st.session_state['tool_config'].get('purge_user_data_password')
+    password = st.text_input('Provide the password to purge the logs folder', type='password') if purge_user_data_password else None
 
-    if st.button('Purge the logs folder', use_container_width=True):
-        if not purge_logs_password or password == purge_logs_password:
-            app_logger.purge_logs_folder()
+    if st.button('Purge user data', use_container_width=True):
+        if not purge_user_data_password or password == purge_user_data_password:
+            session_logger.purge_logs_folder()
+            session_logger.purge_shared_files()
             st.success('Logs folder purged')
-        elif purge_logs_password:
+        elif purge_user_data_password:
             st.error('Input the right password, or ask the webmaster')
 
 elif st.session_state["authentication_status"] is False:
