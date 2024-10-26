@@ -1,23 +1,76 @@
+import logging
+logger = logging.getLogger(__name__)
+
 import os
 import yaml
-import streamlit as st
-import streamlit_authenticator as stauth
-from streamlit_authenticator.utilities.hasher import Hasher
-from src.file_manager import AppLogger
-from yaml.loader import SafeLoader
+from src.file_manager import FileLockManager
 from functools import lru_cache
 import re
+import logging.config
+
+
+def setup_logging():
+    # Define a log format
+    log_format = "%(asctime)s — %(name)s — %(levelname)s — %(message)s"
+    date_format = "%Y-%m-%d %H:%M:%S"
+    # Configure the root logger
+    logging.basicConfig(level=logging.INFO,  # Set the base level to DEBUG
+                        format=log_format,   # Apply the log format
+                        handlers=[
+                            logging.StreamHandler(),  # Output to the console
+                            logging.FileHandler("app.log")  # Save logs to a file
+                        ])
+    
+
+@lru_cache(maxsize=1)
+def load_config(file_name, handle_env_vars=True):
+    try:
+        yaml_content = FileLockManager(file_name).secure_read()
+ 
+        if handle_env_vars:
+            # Combine the substitution logic here
+            pattern = re.compile(r'\$([A-Za-z0-9_]+)')
+            def replace(match):
+                env_var = match.group(1)
+                return os.environ.get(env_var, f'${env_var}')
+            yaml_content = pattern.sub(replace, yaml_content)
+
+        return yaml.safe_load(yaml_content)
+    except FileNotFoundError:
+        logger.warning(f"Configuration file {file_name} not found.")
+        return {}
+    
+
+def scheduler_setup():
+    tool_config = load_config('tool_configs.yaml')
+    folder = tool_config.get('shared_folder', 'shared')  
+    os.makedirs(folder, exist_ok=True)
+    setup_logging()
+    logger.info ("scheduler started")
+    return tool_config   
+
+
 
 
 class CredentialManager:
-
-            
     def __init__(self, tool_config):
         self.tool_config = tool_config
         self.services_list = self.load_services_config()
+
+
+    def __enter__(self):
+        #
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        # 
+        self.close()
+
+    def close(self):
+        # 
+        pass
         
-        if [service for service in self.services_list if service['initialized'] == False]:
-            st.warning("Some API keys are not set. Please go to **🔧 Settings & Recovery** from menu and provide them to use the full potential of the toolkit")
+
 
     def __initialize_services_credentials(self, service):
         if os.environ.get(service['key']):
@@ -38,7 +91,6 @@ class CredentialManager:
         if not api_keys:
             return None
         elif len(api_keys) == 1:
-            api_keys
             return next(iter(api_keys.values()))  # Return the single value if there's only one key
         else:
             return api_keys
@@ -52,7 +104,7 @@ class CredentialManager:
                         services_list.append({'key': key, 'service_name': service})
                 else:
                     services_list.append({'key': config['key'], 'service_name': service})
-                st.session_state[f'use_{service}'] = True
+                
         
         for service in services_list:
             self.__initialize_services_credentials(service)
@@ -68,88 +120,3 @@ class CredentialManager:
                 service['user_provided_key'] = user_key
                 service['initialized'] = 'user'
                 break
-
-
-
-@lru_cache(maxsize=1)
-def load_config(file_name, handle_env_vars=True):
-    try:
-        with open(file_name, 'r') as file:
-            yaml_content = file.read()
- 
-        if handle_env_vars:
-            # Combine the substitution logic here
-            pattern = re.compile(r'\$([A-Za-z0-9_]+)')
-            def replace(match):
-                env_var = match.group(1)
-                return os.environ.get(env_var, f'${env_var}')
-            yaml_content = pattern.sub(replace, yaml_content)
-
-        return yaml.safe_load(yaml_content)
-    except FileNotFoundError:
-        print(f"Configuration file {file_name} not found.")
-        return {}
-    
-
-
-def user_login():
-    if st.session_state['tool_config'].get('require_login', False):
-        user_config = load_config('users.yaml')
-        if not user_config:
-            st.error("Users configuration file not found. Please check users.yaml file")
-            st.stop()
-
-        #Some times streamlit authenticator does not hash the config passwords automatically, making it impossible to login. 
-        #these lines should address those cases
-        for username, user_info in user_config['credentials']['usernames'].items():
-            if not user_info['password'].startswith('$2b$'):  # Check if the password is not already hashed
-                user_info['password'] = Hasher([user_info['password']]).generate()[0]  # Hash the password
-
-
-        authenticator = stauth.Authenticate(
-            user_config.get ('credentials', {}),
-            user_config.get('cookie', {}).get('name', 'consulting_toolkit_cookie'),
-            user_config.get('cookie', {}).get('key', 'signature_key'),
-            user_config.get('cookie', {}).get('expiry_days', 30),
-            user_config.get('pre-authorized', {})
-        )
-        authenticator.login()
-        if st.session_state["authentication_status"]:
-            authenticator.logout(location='sidebar')
-            
-    else:
-        st.session_state["authentication_status"] = True
-        st.session_state["username"] = "anonymous"
-
-
-
-def page_setup(page_config):
-    st.set_page_config(
-        page_title=page_config['page_title'],
-        page_icon=page_config['page_icon'],
-        layout="wide",
-    )
-    st.write(f"# {page_config['page_icon']} - {page_config['page_title']}")
-
-    if not st.session_state.get('tool_config'):
-        st.session_state['tool_config'] = load_config('tool_configs.yaml')
-
-    user_login()
-
-    if st.session_state.get("authentication_status"):       
-
-        if not st.session_state.get('credential_manager'):
-            st.session_state['credential_manager'] = CredentialManager(st.session_state['tool_config'])
- 
-
-        if "app_logger" not in st.session_state:
-            st.session_state["app_logger"] = AppLogger(st.session_state['username'])
-            
-        st.sidebar.write(f"Your session id: {st.session_state['app_logger'].session_id}")    
-
-def page_footer():
-    st.divider()
-    st.write("No other cookie or tracking is done here apart from consulting_toolkit_cookie for login and streamlit session handler")
-    st.write("However uploaded files are stored on server hosting this service and when processed information are shared with OpenAI and other 3rd party when you run the functions. Please be mindful.")
-    st.write("[OpenAI EU Terms of Use](https://openai.com/policies/eu-terms-of-use)")
-    st.write("[Groq Terms of Use](https://wow.groq.com/terms-of-use/)")

@@ -4,16 +4,23 @@ require_login: False
 ## if none is provided will default to logs, can also be provided as an env variable LOGS_ROOT_FOLDER
 ## if purge_logs_password is not provided, the purge logs button in the settings&recovery will be freely available to the user
 logs_root_folder: logs
-#purge_logs_password: 'pinguino'
+purge_user_data_password: 'pinguino'
+
 
 ## Assistants base config 
 assistant_configs:
-  assistant_name: 'Generic Data Analyst'
+  assistant_name: Generic Data Analyst
   tools:
-    - type: "code_interpreter"
-  model: "gpt-4o"
+    - type: code_interpreter
+  model: gpt-4o
   temperature: 0.1
 
+# Scheduler setup
+shared_folder: shared
+shared_summaries_folder: summaries
+shared_completed_folder: archived
+shared_wip_folder: wip
+scheduler_frequency: 60
 
 
 # Services
@@ -22,6 +29,8 @@ assistant_configs:
 ## this key will be searched as env variable, if not found will be required to the user
 
 ## LLMs
+default_llm: gpt-4o-mini
+
 groq:
   use: True
   key: GROQ_API_KEY
