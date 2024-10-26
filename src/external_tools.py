@@ -385,21 +385,42 @@ class AudioTranscribe:
     def __init__(self, session_logger, credential_manager):
         self.save_request_log = session_logger.save_request_log
         self.credential_manager = credential_manager
-        
 
-    def whisper_openai_transcribe(self,audio_file, client:openai.OpenAI):
+    def _transcribe_audio(self, audio_file, provider, client_class, model):
+        """Internal method to handle audio transcription for different providers."""
+        api_key = self.credential_manager.get_api_key(provider)
+        if not api_key:
+            raise StopProcessingError(f"{provider} API key not found.")
+        
         try:
-            client=client(api_key = self.credential_manager.get_api_key('openai'))
+            logger.info(f"Requesting transcription of audio with {provider}")
+            client = client_class(api_key=api_key)
             transcription = client.audio.transcriptions.create(
-                model="whisper-1", 
-                file=audio_file
+                model=model,
+                file=audio_file,
             )
             
             self.save_request_log(transcription, "whisper", "transcribe_audio")
             return transcription.text
- 
+        
         except Exception as e:
             raise RetryableError(f"Encountered an error: {e}")
+
+    def whisper_groq_transcribe(self, audio_file, client=groq.Groq):
+        return self._transcribe_audio(
+            audio_file=audio_file,
+            provider='groq',
+            client_class=client,
+            model="whisper-large-v3-turbo"
+        )
+
+    def whisper_openai_transcribe(self, audio_file, client=openai.OpenAI):
+        return self._transcribe_audio(
+            audio_file=audio_file,
+            provider='openai',
+            client_class=client,
+            model="whisper-1"
+        )
 
 
 class SerpApiManager:

@@ -1,7 +1,7 @@
-from src.prompts import sysmsg_keyword_categorizer,sysmsg_review_analyst_template, sysmsg_summarizer_template
+from src.prompts import sysmsg_keyword_categorizer,sysmsg_review_analyst_template, sysmsg_summarizer_template,sysmsg_final_summary_template
 
 
-from src.external_tools import LlmManager, StopProcessingError, RetryableError, SkippableError, openai_advanced_uses
+from src.external_tools import LlmManager, StopProcessingError, RetryableError, SkippableError, openai_advanced_uses, AudioTranscribe
 from streamlit_autorefresh import st_autorefresh
 from src.file_manager import DataFrameProcessor, SessionLogger, OpenaiThreadLogger, BatchRequestLogger, BatchSummaryLogger
 from src.batch_handler import DfBatchesConstructor
@@ -368,28 +368,91 @@ class SingleRequestConstructor():
         """
         pass
 
-    def llm_summarize(self,text, llm_manager:LlmManager):
+    def audio_transcribe(self,audio_file, audio_transcriber:AudioTranscribe): 
+
+        transcribe_button_disabled = True
+        if audio_file:
+            transcribe_button_disabled = False
+        api_choice = st.selectbox("Select the API", options=["OpenAI", "Groq"])
+        if api_choice == "OpenAI":
+            function = audio_transcriber.whisper_openai_transcribe
+        else:
+            function = audio_transcriber.whisper_groq_transcribe
+
+        transcript = ""
+        if st.button("Transcribe!", use_container_width=True, type="primary", disabled=transcribe_button_disabled):
+            transcript = function(audio_file)
+        if transcribe_button_disabled:
+            st.warning("Upload an audio file on the sidebar to be able to transcribe it")
+        return transcript
+
+    def llm_summarize(self, text, llm_manager: LlmManager):
+    
+        summarize_button_disabled = True
+        if text is not None and len(text) >= 200:
+            summarize_button_disabled = False
+    
+        with st.expander("Advanced Options"):      
+            st.write("In doing the summarization the full transcript gets chopped into chunks:")
+            chunk_length = st.slider("Chunk length (in tokens)", min_value=0, max_value=3200, value=1600, step=1)
+            chunk_overlap = st.slider("Chunk overlap (in tokens)", min_value=0, max_value=320, value=160, step=1)
+            sys_msg = st.text_area("Summarizer Prompt", value=sysmsg_summarizer_template, height=200)
+            final_summarization = st.checkbox("Final summarization", value=True)
+            if final_summarization:
+                final_sys_msg = st.text_area("Final Summarization Prompt", value=sysmsg_final_summary_template, height=200)
+    
+        summarized_transcript = ""
         
-        st.write("In doing the summarization the full transcript gets chopped into chunks:")
-        chunk_length = st.slider("Chunk lenght (in tokens)", min_value=0,max_value=1600,value=800,step=1)
-        chunk_overlap = st.slider("Chunk overlap (in tokens)", min_value=0,max_value=160, value=80 ,step=1)
-        with st.expander:
-            sys_msg = st.text_area("Summarizer Prompt", value=st.session_state['app_configs']['system_message'], height=200)
-        
-        if st.button("Summarize!", use_container_width=True, type="primary"):
+        if st.button("Summarize!", use_container_width=True, type="primary", disabled=summarize_button_disabled):
             with st.spinner(' 🔄 Summarizing...'):
                 chunks_list = TextEmbeddingsProcessors().text_token_chunker(text, chunk_length, chunk_overlap)
-                st.toast(f"ready to summarize {len(chunks_list)} chunks", icon='✨')
-                total_tokens = 0
-                chunk_num = 1
+                
+                # Adjust total_chunks to include final summarization if required
+                total_chunks = len(chunks_list) + (1 if final_summarization else 0)
+                
+                # Initialize the progress container
+                progress_container = st.container()
+                
+                # Initialize a dictionary to hold placeholders for each step
+                if 'summarization_placeholders' not in st.session_state:
+                    st.session_state['summarization_placeholders'] = {}
+    
+                # Create a placeholder for the overall progress
+                overall_placeholder = progress_container.empty()
+                overall_placeholder.markdown(f"**Overall Progress:** {0}/{total_chunks} steps completed")
+                progress_bar = progress_container.progress(0)
+    
+                total_requests = 0
                 summarized_transcript = ""
+                
+                # Iterate through each chunk and update progress
                 for chunk_num, chunk in enumerate(chunks_list, start=1):
-                    assistant_response, used_tokens = llm_manager.llm_request(chunk, sys_msg)
-                    summarized_transcript += f"\n\n\n\n# Summary of Chunk {chunk_num}\n\n{assistant_response}"
-                    st.toast(f"Chunk number {chunk_num} summarized using {used_tokens} tokens", icon='⬆️')
-                    total_tokens += used_tokens
-                st.toast(body=f"All chunks summarized using a total of {total_tokens} tokens", icon='🚀')
-                return summarized_transcript 
+                    assistant_response = llm_manager.llm_request(chunk, sys_msg)
+                    summarized_transcript += f"## Summary of Chunk {chunk_num}\n\n{assistant_response}\n\n"
+                    total_requests += 1
+                    
+                    # Update the overall progress bar
+                    progress = int((chunk_num / total_chunks) * 100)
+                    progress_bar.progress(progress)
+                    overall_placeholder.markdown(f"**Overall Progress:** {chunk_num}/{total_chunks} steps completed")
+                
+                # Handle final summarization if required
+                if final_summarization:
+                    assistant_response = llm_manager.llm_request(summarized_transcript, final_sys_msg)
+                    summarized_transcript = f"# -- Final Summary --\n\n{assistant_response} \n\n# -- Detailed Summary --\n\n{summarized_transcript}"
+                    total_requests += 1
+                    # Update the progress bar for final summarization
+                    progress = int((total_chunks) / total_chunks * 100)
+                    progress_bar.progress(progress)
+                    overall_placeholder.markdown(f"**Overall Progress:** {total_chunks}/{total_chunks} steps completed")
+
+                # Final update to the progress bar
+                progress_bar.progress(100)
+                overall_placeholder.markdown(f"**Overall Progress:** {total_chunks}/{total_chunks} steps completed")
+                
+                st.success(f"All chunks summarized using a total of {total_requests} requests")
+                
+        return summarized_transcript 
             
     def text_chunker(self,user_doc,file_name,df=pd.DataFrame()):  
         with st.expander("Chunker options"):
