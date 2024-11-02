@@ -112,7 +112,7 @@ class DataLoader:
                      'handler': self._doc_handler, 
                      'default': "",
                      'accept_multiple_file':True},
-            "audio": {'extensions': ['mp3','mp4', 'mpeg','mpga','m4a','wav','webm'], 
+            "audio": {'extensions': ['mp3','mp4', 'mpeg','mpga','m4a','wav','webm','ogg'], 
                      'handler': None, 
                      'default':""}
         }
