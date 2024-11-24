@@ -2,7 +2,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from src.file_manager import DataFrameProcessor, BatchRequestLogger
-from src.external_tools import LlmManager, SerpApiManager, WebScraper, OxyLabsManager, openai_advanced_uses
+from src.external_tools import LlmManager, SerpApiManager, WebScraper, OxyLabsManager, openai_advanced_uses, GoogleManager
 from src.streamlit_interface import DfRequestConstructor, openai_thread_setup
 from src.streamlit_interface import dataframe_streamlit_handler, sync_streamlit_processed_df, streamlit_batches_status
 from src.streamlit_setup import page_setup, page_footer, DataLoader, configure_llm_streamlit
@@ -32,11 +32,12 @@ if st.session_state["authentication_status"]:
         serpapi_manager = SerpApiManager(session_logger, credential_manager)
         web_scraper = WebScraper(session_logger)
         oxylabs_manager = OxyLabsManager(session_logger,credential_manager)
+        google_manager = GoogleManager(session_logger,credential_manager)
         openai_advance_manager = openai_advanced_uses(session_logger, credential_manager)
         request_constructor=DfRequestConstructor(df_processor, session_logger)
         
           
-        tabs = st.tabs(["LLM", "Google", "Amazon", "Crawler", "Table Handler", "Assistant Setup","Scheduler"])
+        tabs = st.tabs(["LLM", "Google", "Amazon", "Youtube", "Crawler", "Table Handler", "Assistant Setup"])
         with tabs[0]:        
             df_processor = request_constructor.llm_request_single_column(llm_manager)
             sync_streamlit_processed_df(df_processor)
@@ -44,23 +45,26 @@ if st.session_state["authentication_status"]:
             df_processor = request_constructor.google_request_single_column(serpapi_manager, oxylabs_manager)  
             sync_streamlit_processed_df(df_processor)  
         with tabs[2]:
-            df_processor = request_constructor.oxylabs_request_single_column(oxylabs_manager)  
+            df_processor = request_constructor.amazon_request_single_column(oxylabs_manager)  
             sync_streamlit_processed_df(df_processor)
         with tabs[3]:
-            df_processor = request_constructor.crawler_request_single_column(web_scraper, oxylabs_manager) 
+            df_processor = request_constructor.yt_transcript_request_single_column(google_manager)  
             sync_streamlit_processed_df(df_processor)
         with tabs[4]:
-            df_processor = request_constructor.df_handler()
+            df_processor = request_constructor.crawler_request_single_column(web_scraper, oxylabs_manager) 
+            sync_streamlit_processed_df(df_processor)
         with tabs[5]:
-            openai_thread_setup(openai_advance_manager).streamlit_interface(df_processor.processed_df)
+            df_processor = request_constructor.df_handler()
         with tabs[6]:
-            st.write("### Scheduler - Work in Progress")
+            openai_thread_setup(openai_advance_manager).streamlit_interface(df_processor.processed_df)
             
 
         st.divider()
         # Show a preview of the processed file
         st.write("## Preview of your processed file")
-        st.dataframe(df_processor.processed_df.head(100), use_container_width=True, hide_index=True,)
+        preview_df = df_processor.processed_df.head(100).copy()  # Only copy first 100 rows
+        preview_df = preview_df.astype(str).fillna('') 
+        st.dataframe(preview_df, use_container_width=True, hide_index=True,)
 
         st.session_state['processed_df'] = df_processor.processed_df.astype(str).fillna('')
 

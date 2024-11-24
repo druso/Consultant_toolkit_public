@@ -21,7 +21,7 @@ shared_summaries_folder: summaries
 shared_completed_folder: archived
 shared_wip_folder: wip
 scheduler_frequency: 60
-
+max_cuncurrent_jobs: 5
 
 # Services
 ## Set to true to use the service.
@@ -61,3 +61,7 @@ oxylab:
   key: 
     - OXYLABS_USER
     - OXYLABS_PSW
+
+youtube_api:
+  use: True
+  key: YOUTUBE_API_KEY

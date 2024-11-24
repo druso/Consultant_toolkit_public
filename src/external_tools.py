@@ -1,6 +1,7 @@
 import logging
 logger = logging.getLogger(__name__)
 from src.file_manager import SessionLogger, OpenaiThreadLogger
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 from src.setup import CredentialManager
 import openai
 import groq
@@ -167,8 +168,6 @@ class openai_advanced_uses:
                     stream=True
                 ) 
     
-
-
 
 class LlmManager:
     """
@@ -380,7 +379,6 @@ class LlmManager:
             raise RetryableError(f"Encountered an error: {e}")
 
 
-
 class AudioTranscribe:
     def __init__(self, session_logger, credential_manager):
         self.save_request_log = session_logger.save_request_log
@@ -484,6 +482,69 @@ class SerpApiManager:
         
         return json.dumps(results, indent=4)
 
+            
+    def serpapi_serp_crawler(self, query, **kwargs): #the new method to use with universal paginator
+        """
+        Crawl Google SERP using SerpAPI.
+        Args:
+            query: search query
+            
+        Possible kwargs:
+            - country: geographical location for search (gl parameter)
+            - last_years: filter results by number of years
+            - start_page: starting page number (default 1)
+            - pages: number of pages to fetch (not used in SerpAPI but kept for compatibility)
+        """
+        api_key = self.credential_manager.get_api_key('serp_api')
+        if not api_key:
+            raise StopProcessingError("SerpAPI key not found. Please set it in the **🔧 Settings & Recovery** page.")
+
+        params = {
+            'engine': 'google',
+            'q': query,
+            'api_key': api_key,
+            'gl': kwargs.get('country', 'us'),  # Default to US if not specified
+            'start': kwargs.get('processed_results', 1),
+            'nfpr': 1, #exclude auto corrected results
+        }
+
+        # Add time filter if specified
+        last_years = kwargs.get('last_years', 0)
+        if last_years > 0:
+            params['tbs'] = f"qdr:y{last_years}"
+
+        try:
+            response = requests.get(self.base_url, params=params)
+            if response.status_code == 401:
+                raise StopProcessingError(f"Encountered a 401 Unauthorized Error: {response.text}") 
+            
+            response.raise_for_status()
+            response_json = response.json()
+        
+        except StopProcessingError as e:
+            raise
+        except Exception as e:
+            raise RetryableError(f"Encountered an error: {e}")
+
+
+        formatted_results = []
+        total_results_number = response_json.get('search_information', {}).get('total_results', 0)
+        
+        for result in response_json.get('organic_results', []):
+            formatted_result = {
+                "result_type": "organic",
+                "position": result.get('position'),
+                "link": result.get('link'),
+                "source": result.get('source', 'No source provided'),
+                "title": result.get('title'),
+                "snippet": result.get('snippet'),
+                "date": result.get('date', 'No date provided'),
+                "total_results_number": total_results_number,
+            }
+            formatted_results.append(formatted_result)
+        
+        return formatted_results
+
 
 class WebScraper:
 
@@ -511,6 +572,7 @@ class WebScraper:
         except requests.exceptions.RequestException as e:
             logger.error(f"Error extracting content from '{url}': {e}")
             return "Crawling failed"
+    
     
 class OxyLabsManager():
     def __init__(self,session_logger, credential_manager):
@@ -600,7 +662,6 @@ class OxyLabsManager():
         payload = {
             'source': 'amazon_product',
             'parse': True,
-            'start_page': kwargs.get('start_page', 1)
         }
         payload['query'] = asin
         payload['amazon_domain'] = kwargs.get('amazon_domain','it')
@@ -693,13 +754,13 @@ class OxyLabsManager():
 
         return clean_content
 
-    def serp_crawler(self, query, **kwargs):
+    def oxylab_serp_crawler(self, query, **kwargs):
         """
         Crawl Google SERP using Oxylabs API.
         - query: search query
 
         Possible kwargs:
-        
+
         - domain: domain to search in
         - start_page: starting page number (default 1)
         - results_language: language of results
@@ -713,23 +774,22 @@ class OxyLabsManager():
             'query':query
         }
 
-        for key in [ 'domain', 'geo_location', 'pages']:
+        for key in [ 'domain', 'geo_location', 'pages', 'start_page']:
             if key in kwargs:
                 payload[key] = kwargs[key]
 
         if 'results_language' in kwargs:
             payload['context'].append({'key': 'results_language', 'value': kwargs['results_language']})
-    
+
         last_years = kwargs.get('last_years', 0)
         if last_years > 0:
             payload['context'].append({'key': 'tbs', 'value': f"qdr:y{kwargs['last_years']}"})
 
         logger.info(f"sending payload: \n{payload}")
-               
 
         response = self._post_oxylab_request(payload)
 
-        
+
         organic_results = response['results'][0]['content']['results']['organic']
         page_number = response['results'][0]['content']['page']
         total_results_number = response['results'][0]['content']['results']['search_information']['total_results_count']
@@ -746,112 +806,264 @@ class OxyLabsManager():
             total_results_number = result_set['content']['results']['search_information']['total_results_count']
 
             for result in organic_results:
-                
+
                 formatted_result = {
-                    "page_position": result['pos'],
-                    "page_number":page_number,
+                    "result_type":"organic",
+                    "position": result['pos_overall'],
                     "link": result['url'],
                     "source": result.get('favicon_text', 'No source provided'),
                     "title": result['title'],
                     "snippet": result['desc'],
+                    "date": result.get('date', 'No date provided'),
                     "total_results_number": total_results_number,
                 }
                 formatted_results.append(formatted_result)
-            
-            return formatted_results
+
+        return formatted_results
+    
     
 
-    def serp_paginator(self, query, num_results, fix_position=True, **kwargs):
-        results = []
-        start_page = kwargs.get('start_page', 1)  # Allowing start_page to be set via kwargs
-        actual_num_results = num_results
-        min_results_per_page = 6  # Initial minimum
-        max_pages_per_request = kwargs.get('max_pages', self.paginator_max_pages)  # Renamed for clarity
-        max_retries = 3
+class GoogleManager:
+    def __init__(self, session_logger, credential_manager):
+        """Initialize the Google Manager with credentials"""
+        self.save_request_log = session_logger.save_request_log
+        self.credential_manager = credential_manager
+        self.yt_base_url = "https://www.googleapis.com/youtube/v3"
+        
+        
+    def _make_youtube_request(self, endpoint, params, log_identifier):
+        """
+        Make a request to YouTube API with error handling.
+        
+        Args:
+            endpoint (str): API endpoint path
+            params (dict): Query parameters
+            log_identifier (str): Identifier for logging
+            
+        Returns:
+            dict: JSON response from the API
+            
+        Raises:
+            StopProcessingError: For authentication errors
+            RetryableError: For temporary API issues
+        """
+        try:
+            params['key'] = self.credential_manager.get_api_key('google')
+            url = f"{self.yt_base_url}/{endpoint}"
+            
+            response = requests.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+            
+            self.save_request_log(data, "YouTube", log_identifier)
+            return data
+            
+        except requests.exceptions.RequestException as e:
+            if isinstance(e, requests.exceptions.HTTPError) and e.response.status_code in (401, 403):
+                raise StopProcessingError(f"Authentication failed: {str(e)}")
+            raise RetryableError(f"Failed to fetch YouTube data: {str(e)}")
+        except Exception as e:
+            raise RetryableError(f"Unexpected error: {str(e)}")
+    
+    def get_youtube_channel_videos(self, channel_name, max_results=50):
+        """
+        Fetch video IDs from a YouTube channel.
+        
+        Args:
+            channel_name (str): Name of the YouTube channel
+            max_results (int): Maximum number of videos to return (default: 50)
+            
+        Returns:
+            list: List of video IDs
+        """
+        # First, get the channel ID
+        channel_params = {
+            'q': channel_name,
+            'type': 'channel',
+            'part': 'id',
+            'maxResults': 1
+        }
+        
+        channel_data = self._make_youtube_request(
+            'search',
+            channel_params,
+            f"channel_search_{channel_name}"
+        )
+        
+        if not channel_data.get('items'):
+            raise SkippableError(f"No channel found with name: {channel_name}")
+        
+        channel_id = channel_data['items'][0]['id']['channelId']
+        
+        # Then get the videos from the channel
+        videos_params = {
+            'channelId': channel_id,
+            'type': 'video',
+            'part': 'id',
+            'order': 'date',
+            'maxResults': max_results
+        }
+        
+        videos_data = self._make_youtube_request(
+            'search',
+            videos_params,
+            f"channel_videos_{channel_name}"
+        )
+        
+        return [item['id']['videoId'] for item in videos_data.get('items', [])]
+    
+    def get_youtube_search_videos(self, search_query, max_results=50, order='relevance'):
+        """
+        Search for YouTube videos based on a query string.
+        
+        Args:
+            search_query (str): Search query string
+            max_results (int): Maximum number of videos to return (default: 50)
+            order (str): Order of results. Options: 'date', 'rating', 'relevance', 
+                        'title', 'videoCount', 'viewCount' (default: 'relevance')
+            
+        Returns:
+            list: List of video IDs
+        """
+        search_params = {
+            'q': search_query,
+            'type': 'video',
+            'part': 'id',
+            'maxResults': max_results,
+            'order': order
+        }
+        
+        search_data = self._make_youtube_request(
+            'search',
+            search_params,
+            f"search_videos_{search_query}"
+        )
+        
+        return [item['id']['videoId'] for item in search_data.get('items', [])]
+    
+    def get_youtube_transcript(self, video_id):
+        """
+        Get the transcript/captions for a YouTube video using youtube_transcript_api.
+        
+        Args:
+            video_id (str): YouTube video ID
+            
+        Returns:
+            str: Combined transcript text
+            
+        Raises:
+            SkippableError: If no captions are available
+            RetryableError: For temporary API issues
+        
+        If needed in the future it can implement also: language, translate_to, preserve_formatting, preserve_timestamps
+        """
+        try:
+            transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+            
+            # Combine all text entries into a single string
+            transcript_text = ' '.join(entry['text'] for entry in transcript_list)
+            
+            # Log the operation (without the full transcript to save space)
+            self.save_request_log(
+                {"video_id": video_id, "transcript_length": len(transcript_text)},
+                "YouTube",
+                f"transcript_{video_id}"
+            )
+            
+            return transcript_text
+            
+        except (TranscriptsDisabled, NoTranscriptFound) as e:
+            raise SkippableError(f"No transcript available for video {video_id}: {str(e)}")
+        except Exception as e:
+            raise RetryableError(f"Failed to fetch transcript: {str(e)}")
 
-        # Initialize the status bar if status_bar is True
-        """if status_bar:
-            st = import_streamlit()
-            status_text = st.empty()
-            progress_bar = st.progress(0)"""
-
-        while len(results) < actual_num_results:
-            remaining_results = actual_num_results - len(results)
-            pages_needed = ceil(remaining_results / min_results_per_page) if min_results_per_page > 0 else 1
-            pages_to_fetch = min(pages_needed, max_pages_per_request)
-
-            current_kwargs = kwargs.copy()
-            current_kwargs['pages'] = pages_to_fetch
-            current_kwargs['start_page'] = str(start_page)
-
-            # Update status bar
-            """if status_bar:
-                status_text.text(f"Fetching results for '{query}' (Page {start_page} to {start_page + pages_to_fetch - 1})")
-                progress = len(results) / actual_num_results
-                progress_bar.progress(min(progress, 1.0))"""
-
-            retry_count = 0
-            while retry_count < max_retries:
-                try:
-                    page_results = self.serp_crawler(query, **current_kwargs)
-                    logger.info(f"Fetched pages {start_page} to {start_page + pages_to_fetch - 1}")
-                    logger.info(f"Received {len(page_results)} results")
+def universal_paginator(request_method, query: str, num_results=None, **kwargs):
+    start_page = kwargs.get('start_page', 1)
+    max_retries = 3
+    pages_per_request = 5 if not 'serpapi' in request_method.__name__ else 1
+    
+    current_page = start_page
+    total_results = None
+    processed_results = 0
+    last_results_count = 0
+    
+    while True:
+        current_kwargs = kwargs.copy()
+        
+        if 'serpapi' in request_method.__name__:
+            current_kwargs['processed_results'] = processed_results
+        else:
+            current_kwargs['pages'] = pages_per_request
+            current_kwargs['start_page'] = str(current_page)
+        
+        retry_count = 0
+        page_results = None
+        
+        while retry_count < max_retries:
+            try:
+                page_results = request_method(query, **current_kwargs)
+                # Check if page_results is None or empty
+                if not page_results:
+                    logger.warning(f"No results returned for query '{query}' on page {current_page}")
                     break
-                except RetryableError as e:
-                    retry_count += 1
-                    if retry_count < max_retries:
-                        logger.warning(f"Retryable error occurred: {str(e)}. Retrying in 5 seconds... ({retry_count}/{max_retries})")
-                        """if status_bar:
-                            status_text.text(f"Retrying... ({retry_count}/{max_retries})")"""
-                        sleep(5)
-                    else:
-                        logger.error(f"Max retries reached for retryable error: {str(e)}")
-                        page_results = []
-                except SkippableError as e:
-                    logger.error(f"Skippable error occurred: {str(e)}. Skipping pages {start_page} to {start_page + pages_to_fetch - 1}.")
-                    page_results = []
-                    break
-                except StopProcessingError:
-                    """if status_bar:
-                        status_text.text("Error: Stopped processing")
-                        progress_bar.progress(1.0)"""
-                    logger.error("Processing was stopped due to a StopProcessingError.")
-                    raise
+                
+                current_processed = processed_results
+                current_batch_size = len(page_results)
+                
+                # If we have a num_results limit, only take what we need
+                if num_results and (current_processed + current_batch_size) > num_results:
+                    page_results = page_results[:num_results - current_processed]
+                    current_batch_size = len(page_results)  # Recalculate after truncating
 
-            if not page_results:
-                start_page += pages_to_fetch
-                continue
-
-            if not results:
-                total_results_number = page_results[0].get('total_results_number', actual_num_results)
-                if total_results_number < actual_num_results:
-                    actual_num_results = total_results_number
-                    logger.info(f"Adjusted target to {actual_num_results} based on total_results_number")
-                actual_results_per_page = len(page_results) / pages_to_fetch if pages_to_fetch > 0 else 0
-                if actual_results_per_page > 0:
-                    min_results_per_page = max(int(actual_results_per_page), 1)  # Ensure at least 1
-                else:
-                    min_results_per_page = 1  # Fallback to 1 to prevent division by zero
-
-            results.extend(page_results)
-
-            if len(results) >= actual_num_results:
-                logger.info(f"Terminating: Collected {len(results)} results (target: {actual_num_results})")
+                # Calculate absolute positions
+                base_position = current_processed + 1
+                for i, result in enumerate(page_results):
+                    result['absolute_position'] = base_position + i
+                
+                # Update total_results if available
+                if total_results is None and page_results and page_results[0].get('total_results_number'):
+                    total_results = min(
+                        page_results[0].get('total_results_number'),
+                        num_results if num_results else float('inf')
+                    )
+                
+                # Update counters safely
+                last_results_count = current_batch_size
+                processed_results = current_processed + current_batch_size
+                
+                progress_info = {
+                    'current_page': current_page,
+                    'total_results': total_results,
+                    'processed_results': processed_results
+                }
+                
+                yield page_results, progress_info
                 break
-
-            # Increment start_page for the next batch
-            start_page += pages_to_fetch
-
-        # Trim results to the exact number of results needed
-        results = results[:actual_num_results]
-
-        if fix_position:
-            for new_position, result in enumerate(results, start=1):
-                result['position'] = new_position
-
-        # Update status bar to show completion
-        """if status_bar:
-            status_text.text(f"Finished fetching results for '{query}'")
-            progress_bar.progress(1.0)"""
-
-        return results
+                
+            except RetryableError as e:
+                retry_count = retry_count + 1
+                if retry_count < max_retries:
+                    logger.warning(f"Retryable error occurred: {str(e)}. Retrying in 5 seconds... ({retry_count}/{max_retries})")
+                    sleep(5)
+                else:
+                    logger.error(f"Max retries reached for retryable error: {str(e)}")
+                    break
+            except SkippableError as e:
+                logger.error(f"Skippable error occurred: {str(e)}. Skipping pages {current_page}-{current_page + pages_per_request - 1}.")
+                break
+            except StopProcessingError:
+                logger.error("Processing was stopped due to a StopProcessingError.")
+                raise
+        
+        # Break conditions with explicit logging
+        if not page_results:
+            logger.info(f"Stopping pagination: No results returned for query '{query}'")
+            break
+        if num_results and processed_results >= num_results:
+            logger.info(f"Stopping pagination: Reached target number of results ({num_results})")
+            break
+        if last_results_count == 2:
+            logger.info("Stopping pagination: Reached end of available results")
+            break
+        
+        current_page = current_page + pages_per_request

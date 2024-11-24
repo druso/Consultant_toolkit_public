@@ -1,4 +1,6 @@
 import logging
+logger = logging.getLogger(__name__)
+
 import threading
 import time
 import os
@@ -6,10 +8,9 @@ from queue import Queue
 from datetime import datetime
 from src.setup import scheduler_setup, CredentialManager
 from src.file_manager import FolderSetupMixin
-from src.batch_handler import DfBatchesConstructor, BatchManager
+from src.batch_handler import BatchManager
 import pandas as pd
 
-logger = logging.getLogger(__name__)
 
 
 class BatchManagerFactory:
@@ -43,9 +44,6 @@ batch_manager_factory = BatchManagerFactory(tool_config)
 credential_manager_factory = CredentialManagerFactory(tool_config)
 
 
-MAX_CONCURRENT_JOBS = 5  # Set your desired maximum number of concurrent jobs
-
-
 def worker(job_queue, credential_manager_factory, batch_manager_factory):
     thread_credential_manager = credential_manager_factory.create_credential_manager()
     while True:
@@ -66,18 +64,18 @@ def worker(job_queue, credential_manager_factory, batch_manager_factory):
     thread_credential_manager.close()
 
 
-def run_scheduler(frequency=tool_config['scheduler_frequency'], process_newest_first=False):
+def run_scheduler(tool_config, credential_manager_factory, batch_manager_factory, process_newest_first=False):
     logger.info("Cronjob: Scheduler started, looking for pending jobs")
 
     job_queue = Queue()
 
     threads = []
-    for i in range(MAX_CONCURRENT_JOBS):
+    for i in range(tool_config['max_cuncurrent_jobs']):
         t = threading.Thread(
             target=worker, 
             args=(job_queue, credential_manager_factory, batch_manager_factory)
         )
-        t.daemon = True  # Allows program to exit even if threads are running
+        t.daemon = True  
         t.start()
         threads.append(t)
 
@@ -98,10 +96,11 @@ def run_scheduler(frequency=tool_config['scheduler_frequency'], process_newest_f
                 job_queue.put(filename)
                 logger.info(f"Added file to job queue: {filename}")
 
-            logger.info(f"Will sleep for {frequency} seconds, good night")
-            time.sleep(frequency)
+            logger.info(f"Will sleep for {tool_config['scheduler_frequency']} seconds, good night")
+            time.sleep(tool_config['scheduler_frequency'])
     except KeyboardInterrupt:
         logger.info("Scheduler interrupted. Shutting down.")
+        
     finally:
         for _ in threads:
             job_queue.put(None)
@@ -110,4 +109,4 @@ def run_scheduler(frequency=tool_config['scheduler_frequency'], process_newest_f
 
 
 if __name__ == "__main__":
-    run_scheduler()
+    run_scheduler(tool_config, credential_manager_factory, batch_manager_factory)
