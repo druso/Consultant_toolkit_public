@@ -10,7 +10,7 @@ import uuid
 import zipfile
 import time
 import re
-from typing import Tuple, Any, Optional, List
+from typing import Tuple, Any, Optional, List, Union
 import shutil
 from contextlib import contextmanager
 
@@ -541,6 +541,34 @@ class SessionLogger(FolderSetupMixin) :
             return path
         if return_filename:
             return filename
+        
+    def log_json(self, data: Union[dict, list], name: str = "", return_path: bool = False, return_filename: bool = False) -> Optional[str]:
+        """
+        Saves a dictionary or list as a JSON file within the session's logs folder.
+
+        Args:
+            data (Union[dict, list]): The data to save as JSON.
+            version (str, optional): A string to include in the filename, indicating
+                the data version (e.g., "raw", "processed"). Defaults to "processed".
+            return_path (bool, optional): If True, returns the full path where the file was saved.
+            return_filename (bool, optional): If True, returns just the filename.
+
+        Returns:
+            Optional[str]: The path or filename if requested, None otherwise.
+        """
+        folder = self.session_files_folder()
+        os.makedirs(folder, exist_ok=True)
+        filename = f"{name}.json"
+        path = f"{folder}/{filename}"
+        
+        with open(path, "w", encoding='utf-8') as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+        logger.info(f"Saved JSON log at {path}")
+        
+        if return_path:
+            return path
+        if return_filename:
+            return filename
 
     def save_request_log(self, response: dict, service: str, calltype: str) -> None:
         """
@@ -605,18 +633,17 @@ class BatchRequestLogger(FolderSetupMixin):
         
         return f"batch_{new_batch_number:03d}"
         
-    def post_scheduler_request(self, 
+    def post_df_scheduler_request(self, 
                                df, 
                                session_logger, 
-                               function, 
+                               function_name, 
                                query_column, 
                                response_column, 
                                kwargs):
         batch_id = self._generate_batch_id()
         #batch_id = "batch_" + str(len(batches_list) + 1).zfill(3)
 
-        input_file = session_logger.log_excel(df, "batch", return_path=False, return_filename=True)
-        function_name = function.__name__ if callable(function) else function
+        input_filename = session_logger.log_excel(df, "batch", return_path=False, return_filename=True)
         processed_kwargs = {
             key: (value.__name__ if callable(value) else 
                   value if isinstance(value, (int, float, str, bool, type(None))) else 
@@ -629,10 +656,48 @@ class BatchRequestLogger(FolderSetupMixin):
             user_id=self.user_id,
             session_id=self.session_id,
             function=function_name,
+            type="df",
             batch_size=0,
-            input_file=input_file,
+            input_file=input_filename,
             query_column=query_column,
             response_column=response_column,
+            kwargs=processed_kwargs
+        )
+
+        folder = self.tool_config.get('shared_folder', 'shared')
+        payload_filename=f"{self.user_id}_{batch_id}_PENDING.json"
+        with open(f"{folder}/batches/{payload_filename}", "w") as f:
+            json.dump(payload.to_dict(), f, indent=4)
+            logger.info(f"saved batch request at {folder}/batches/{batch_id}_PENDING.json")
+        self.batch_summary_logger.update_batch_summary(payload, status="PENDING", filename=payload_filename)
+
+
+    def post_list_scheduler_request(self, 
+                               queries_list, 
+                               session_logger, 
+                               function_name, 
+                               kwargs):
+        batch_id = self._generate_batch_id()
+
+        request_name = datetime.now().strftime('%y%m%d%H%M%S') + "_" + function_name
+        input_filename= session_logger.log_json(queries_list, request_name, return_path=False, return_filename=True)
+        processed_kwargs = {
+            key: (value.__name__ if callable(value) else 
+                  value if isinstance(value, (int, float, str, bool, type(None))) else 
+                  str(value))
+            for key, value in kwargs.items()
+        }
+
+        payload = BatchRequestPayload(
+            batch_id=batch_id,
+            user_id=self.user_id,
+            session_id=self.session_id,
+            function=function_name, #TOFIX this name generate confusion, it should be function_name also in the payload
+            type="list",
+            batch_size=kwargs["request_size"], #TOFIX batch size is the request size, I should change this way of naming  as for the df is set to 0 as it will always request the whole file
+            input_file=input_filename,
+            query_column="list processor",
+            response_column="list processor",
             kwargs=processed_kwargs
         )
 
@@ -767,7 +832,15 @@ class BatchSummaryLogger(FolderSetupMixin):
     def update_payload_status(self, payload_filename, status):
         payload_filepath = os.path.join(self.batches_folder, payload_filename)
         
-        if not status in ["PENDING", "WIP", "COMPLETED", "CANCELLED", "STOPPED"]:
+        if not status in ["PENDING", "WIP", "COMPLETED", "CANCELLED","STOPPED" "FAILED"]:
+            """
+            PENDING: waiting to be processed
+            WIP: being processed
+            COMPLETED: processed successfully
+            CANCELLED: processing was cancelled before starting
+            STOPPED: processing was stopped while running
+            FAILED: processing failed
+            """
             raise ValueError(f"Invalid status: '{status}'")
 
         payload_dir_path, payload_filename = os.path.split(payload_filepath)

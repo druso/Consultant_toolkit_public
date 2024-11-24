@@ -12,3 +12,4 @@ scikit-learn
 beautifulsoup4
 streamlit_authenticator==0.3.2
 streamlit-autorefresh
+youtube_transcript_api

@@ -1,7 +1,7 @@
 from src.prompts import sysmsg_keyword_categorizer,sysmsg_review_analyst_template, sysmsg_summarizer_template,sysmsg_final_summary_template
 
 
-from src.external_tools import LlmManager, StopProcessingError, RetryableError, SkippableError, openai_advanced_uses, AudioTranscribe
+from src.external_tools import LlmManager, StopProcessingError, RetryableError, SkippableError, openai_advanced_uses, AudioTranscribe, SerpApiManager, OxyLabsManager, universal_paginator
 from streamlit_autorefresh import st_autorefresh
 from src.file_manager import DataFrameProcessor, SessionLogger, OpenaiThreadLogger, BatchRequestLogger, BatchSummaryLogger
 from src.batch_handler import DfBatchesConstructor
@@ -13,7 +13,7 @@ import time
 import base64
 import os
 from sklearn.metrics.pairwise import cosine_similarity
-
+import re
 
 from openai.types.beta.assistant_stream_event import (
     ThreadRunStepCreated,
@@ -108,10 +108,10 @@ class DfRequestConstructor():
                 if query_column == default_query_value:
                     st.warning("*No column selected. Please choose a column.*")
                 else:
-                    self.batch_request_logger.post_scheduler_request(
+                    self.batch_request_logger.post_df_scheduler_request(
                                                     df=self.df_processor.processed_df,
                                                     session_logger=self.session_logger,
-                                                    function=function, 
+                                                    function_name = function.__name__ if callable(function) else function,
                                                     query_column=query_column, 
                                                     response_column=response_column, 
                                                     kwargs=kwargs
@@ -166,42 +166,34 @@ class DfRequestConstructor():
         return self.df_processor.processed_df
 
 
-    def google_request_single_column(self, serpapi_manager, oxylabs_manager, config_package=None):
+    def google_request_single_column(self, serpapi_manager:SerpApiManager, oxylabs_manager:OxyLabsManager, config_package=None):
         if config_package:
             self._base_batch_streamlit(function=serpapi_manager.extract_organic_results, config_package=config_package, force_string=False)
         else:
             st.write("### Batch Requests to Crawl Google")
-            st.write("Here you can take a column and search each item on Google")
+            st.write("Here you can take a column and search each item on Google, will return the first page, if need more use the dedicated function (different tab)")
 
             crawler_type = st.selectbox("Select the crawler", options=["Oxylabs", "SerpAPI"], help="Select the crawler you want to use")
+            country=st.selectbox("country",['it','us','uk','fr','de','es']) 
+
+            last_years = st.number_input("N of Past Years",min_value=0,max_value=10,step=1,value=0, help="Limit results to certain past years. Set to 0 for no limit")
 
             if crawler_type == "SerpAPI":
-                country=st.selectbox("country",['it','us','uk','fr','de','es']) 
-                num_results = st.number_input("Number of results per query",min_value=1,max_value=10,step=1,value=3, help="The number of search results to save in the response")
 
-                last_years = st.number_input("N of Past Years",min_value=0,max_value=10,step=1,value=0, help="Limit results to certain past years. Set to 0 for no limit")
-
-                self._base_batch_streamlit(function=serpapi_manager.extract_organic_results, 
+                self._base_batch_streamlit(function=serpapi_manager.serpapi_serp_crawler, 
                                         query_name="Content to search", 
                                         response_name="Google Results",
                                         function_name="Google Search",
-                                        num_results=num_results,
                                         country=country,
                                         last_years=last_years,)
                 
             if crawler_type == "Oxylabs":
 
-                domain=st.selectbox("country",['it','us','uk','fr','de','es']) 
-                num_results = st.number_input("Number of results per query",min_value=1,max_value=1000,step=1,value=3, help="The number of search results to save in the response")
-
-                last_years = st.number_input("N of Past Years",min_value=0,max_value=10,step=1,value=0, help="Limit results to certain past years. Set to 0 for no limit")
-
-                self._base_batch_streamlit(function=oxylabs_manager.serp_paginator, 
+                self._base_batch_streamlit(function=oxylabs_manager.oxylab_serp_crawler, 
                                         query_name="Content to search", 
                                         response_name="Google Results",
                                         function_name="Google Search",
-                                        num_results=num_results,
-                                        domain=domain,
+                                        domain=country,
                                         last_years=last_years,
                                         #status_bar=True,
                                         )
@@ -232,7 +224,7 @@ class DfRequestConstructor():
         return self.df_processor
 
 
-    def oxylabs_request_single_column(self, oxylabs_manager, config_package=None):
+    def amazon_request_single_column(self, oxylabs_manager, config_package=None):
         if config_package:
             self._base_batch_streamlit(function=oxylabs_manager.extract_amazon_product_info, config_package=config_package, force_string=False)
         else:
@@ -252,17 +244,29 @@ class DfRequestConstructor():
                                         amazon_domain=amazon_domain)
 
             elif function == 'Reviews':
-                review_pages = st.number_input("Review Pages per product",min_value=1,max_value=5,step=1,value=1, help="The number of search results to save in the response")
                 
                 self._base_batch_streamlit(function=oxylabs_manager.get_amazon_review, 
                                         query_name="ASIN to retrieve", 
                                         response_name="Amazon info",
                                         function_name="Amazon search",
-                                        amazon_domain=amazon_domain,
-                                        review_pages=review_pages)
+                                        amazon_domain=amazon_domain,)
         return self.df_processor
 
 
+    def yt_transcript_request_single_column(self, google_manager, config_package=None):
+        if config_package:
+            self._base_batch_streamlit(function=google_manager.get_youtube_transcript, config_package=config_package, force_string=False)
+        else:
+            st.write("### Batch Youtube Transcript Requests")
+            st.write("Here you can get youtube transcripts massively")
+        
+            self._base_batch_streamlit(function=google_manager.get_youtube_transcript, 
+                                    query_name="video ID to retrieve", 
+                                    response_name="Video Transcript",
+                                    function_name="Youtube transcript downloader",
+)
+        return self.df_processor
+    
     
     def df_handler(self):
         st.write("### Table Handler")
@@ -359,8 +363,7 @@ class DfRequestConstructor():
         
 
         return self.df_processor
-
-    
+  
 class SingleRequestConstructor():
     def __init__(self):
         """
@@ -925,8 +928,6 @@ class streamlit_batches_status():
             st.info("No completed batches available for download.")
 
 
-
-
     def stop_batch_interface(self):
         st.write("### Stop Batches")
         st.write("Select a batch to post a stop request:")
@@ -983,3 +984,99 @@ class streamlit_batches_status():
                 st.write(pending_stop_requests)  # Fallback to plain list display
         else:
             st.info("No pending stop requests")
+
+class DeepExtractorInterface:
+    """Interface for handling deep extraction requests for various services."""
+    
+    def __init__(self, session_logger: SessionLogger):
+        self.session_logger = session_logger
+        self.batch_request_logger = BatchRequestLogger(
+            session_logger.user_id, 
+            session_logger.session_id, 
+            session_logger.tool_config
+        )
+        
+        # Configuration for different services
+        self.service_configs = {
+            "Google Results Oxylab": {
+                "function_name": "oxylabs_serp_crawler",
+                "countries": ['it', 'us', 'uk', 'fr', 'de', 'es'],
+                "has_year_filter": True
+            },
+            "Google Results SerpAPI": {
+                "function_name": "serpapi_serp_crawler",
+                "countries": ['it', 'us', 'uk', 'fr', 'de', 'es'],
+                "has_year_filter": True
+            },
+            "Amazon Reviews": {
+                "function_name": "get_amazon_review",
+                "countries": ['it', 'de', 'es', 'fr', 'com', 'co.uk', 'co.jp', 'ae', 'ca', 'cn', 
+                            'com.au', 'com.be', 'com.br', 'com.mx', 'com.tr', 'eg', 'in', 'nl', 'pl', 'sa', 'se'],
+                "validator": self._is_valid_asin,
+                "error_msg": "One or more invalid ASINs detected"
+            },
+        }
+
+    def main_interface(self):
+        """Main interface for the deep extractor."""        
+        # Get and validate queries
+        queries_list = self._get_validated_queries()
+        if not queries_list:
+            return
+            
+        # Service selection
+        service_name = st.selectbox("Select a service", list(self.service_configs.keys()))
+        service_config = self.service_configs[service_name]
+        
+        # Validate input based on service requirements
+        if validator := service_config.get('validator'):
+            if not all(validator(query) for query in queries_list):
+                st.error(service_config['error_msg'])
+                return
+        
+        # Common parameters
+        payload = {
+            "country": st.selectbox("Country", service_config["countries"]),
+            "request_size": st.number_input(
+                "Request Batch Size",
+                min_value=10,
+                max_value=1000,
+                step=1,
+                value=10,
+                help="Number of max results to extract"
+            )
+        }
+        
+        # Add year filter for Google services
+        if service_config.get("has_year_filter"):
+            payload["last_years"] = st.number_input(
+                "N of Past Years",
+                min_value=0,
+                max_value=10,
+                step=1,
+                value=0,
+                help="Limit results to certain past years. Set to 0 for no limit"
+            )
+        
+        # Post request button
+        if st.button("Post Request", use_container_width=True):
+            self.batch_request_logger.post_list_scheduler_request(
+                queries_list,
+                session_logger=self.session_logger,
+                function_name=service_config["function_name"],
+                kwargs=payload
+            )
+            st.toast("Request sent to the scheduler", icon='🚀')
+
+    def _get_validated_queries(self) -> list[str]:
+        """Get and validate user input queries."""
+        query_input = st.text_area("Enter your keys separated by comma", key="deep_extractor_query")
+        if not query_input:
+            st.warning("Start by providing your queries separated by comma")
+            return []
+        return [q.strip() for q in query_input.split(',') if q.strip()]
+
+    @staticmethod
+    def _is_valid_asin(asin_str: str) -> bool:
+        """Validate Amazon Standard Identification Number format."""
+        return bool(re.match(r'^[A-Z0-9]{10}$', asin_str.strip()))

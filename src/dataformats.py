@@ -7,6 +7,7 @@ class BatchRequestPayload:
     batch_id: str
     user_id: str
     session_id: str
+    type: str
     function: str
     batch_size: int
     input_file: str
@@ -25,6 +26,7 @@ class BatchRequestPayload:
                 user_id=data['user_id'],
                 session_id=data['session_id'],
                 function=data['function'],
+                type=data['type'], # df or list
                 batch_size=data['batch_size'],
                 input_file=data['input_file'],
                 query_column=data['query_column'],
