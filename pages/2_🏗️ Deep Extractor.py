@@ -1,6 +1,7 @@
 import logging
 logger = logging.getLogger(__name__)
-from src.streamlit_interface import DeepExtractorInterface
+from src.streamlit_interface import DeepExtractorInterface, InfoFinderInterface
+from src.external_tools import OxyLabsManager
 from src.streamlit_setup  import page_setup, page_footer
 import streamlit as st
 import os
@@ -14,8 +15,13 @@ page_setup(page_config)
 if st.session_state["authentication_status"]:
     session_logger = st.session_state["session_logger"]
     credential_manager = st.session_state['credential_manager']
+    oxylabs_manager = OxyLabsManager(session_logger,credential_manager)
 
-    DeepExtractorInterface(session_logger).main_interface()
+    tabs = st.tabs(["Deep extractor requests", "Info finder"])
+    with tabs[0]:
+        DeepExtractorInterface(session_logger).main_interface()
+    with tabs[1]:
+        InfoFinderInterface(session_logger,oxylabs_manager).google_product_finder()
 
 
 elif st.session_state["authentication_status"] is False:

@@ -222,6 +222,29 @@ class DfRequestConstructor():
                                         response_name="Crawled content",
                                         function_name="Crawl",)
         return self.df_processor
+    
+
+
+    def review_request_single_column(self, serpapi_manager:SerpApiManager, config_package=None):
+        if config_package:
+            self._base_batch_streamlit(function=serpapi_manager.serpapi_review_crawler, config_package=config_package, force_string=False)
+        else:
+            st.write("### Batch Google Reviews Requests")
+            st.write("Here you can take Google Product ids from a column and crawl their reviews from Google")
+        
+            domain = st.selectbox("Select the google website country", 
+                                        options=['it', 'de', 'es', 'fr', 'com', 'co.uk', 'co.jp', 'ae', 'ca', 'cn', 'com.au', 'com.be', 'com.br', 'com.mx', 'com.tr', 'eg', 'in', 'nl', 'pl', 'sa', 'se'],
+                                        help="The column that will be passed as query to the oxylabs call") 
+
+
+            self._base_batch_streamlit(function=serpapi_manager.serpapi_review_crawler, 
+                                    query_name="Aproduct ID to retrieve", 
+                                    response_name="Product reviews",
+                                    function_name="retrieve review",
+                                    domain=domain)
+
+
+        return self.df_processor
 
 
     def amazon_request_single_column(self, oxylabs_manager, config_package=None):
@@ -1015,6 +1038,11 @@ class DeepExtractorInterface:
                 "validator": self._is_valid_asin,
                 "error_msg": "One or more invalid ASINs detected"
             },
+            "Google Reviews": {  # TO REVIEW AND ADD A VALIDATOR
+                "function_name": "serpapi_review_crawler",
+                "countries": ['it', 'de', 'es', 'fr', 'com', 'co.uk', 'co.jp', 'ae', 'ca', 'cn', 
+                            'com.au', 'com.be', 'com.br', 'com.mx', 'com.tr', 'eg', 'in', 'nl', 'pl', 'sa', 'se'],
+            }
         }
 
     def main_interface(self):
@@ -1080,3 +1108,54 @@ class DeepExtractorInterface:
     def _is_valid_asin(asin_str: str) -> bool:
         """Validate Amazon Standard Identification Number format."""
         return bool(re.match(r'^[A-Z0-9]{10}$', asin_str.strip()))
+    
+class InfoFinderInterface():
+    """Interface for searching info useful for deep extraction requests"""
+    
+    def __init__(self, session_logger: SessionLogger, oxylabmanager:OxyLabsManager):
+        self.session_logger = session_logger
+        self.oxylabs_manager = oxylabmanager
+
+    def google_product_finder(self):
+        # Initialize session state for search results if not exists
+        if 'product_results' not in st.session_state:
+            st.session_state.product_results = None
+
+        product_name = st.text_input("Enter the product name")
+        
+        country =  st.selectbox("Country", ['it', 'us'])
+        
+        # Search button updates the session state
+        if st.button("search"):
+            product_ids = self.oxylabs_manager.get_google_productids(product_name, domain=country)
+            st.session_state.product_results = product_ids
+
+        # Display results if they exist in session state
+        if st.session_state.product_results:
+            df = pd.DataFrame(st.session_state.product_results)
+            
+            # Display the DataFrame with selection
+            event = st.dataframe(
+                df,
+                column_config={
+                    "thumbnail": st.column_config.ImageColumn(
+                        "Product Image",
+                        help="Product thumbnail image",
+                    ),
+                },
+                hide_index=True,
+                use_container_width=True,
+                selection_mode="multi-row",
+                on_select="rerun",
+            )
+            
+            # If rows are selected, display the IDs
+            if event.selection.rows:
+                selected_ids = df.iloc[event.selection.rows]['product_id'].tolist()
+                st.text_area(
+                    "Selected Product IDs", 
+                    value=",".join(selected_ids),
+                    help="Copy these comma-separated IDs to use them in other tools"
+                )
+        elif st.session_state.product_results == []:
+            st.warning("No products found")
