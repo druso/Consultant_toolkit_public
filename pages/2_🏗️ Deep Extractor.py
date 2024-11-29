@@ -17,11 +17,11 @@ if st.session_state["authentication_status"]:
     credential_manager = st.session_state['credential_manager']
     oxylabs_manager = OxyLabsManager(session_logger,credential_manager)
 
-    tabs = st.tabs(["Deep extractor requests", "Info finder"])
+    tabs = st.tabs(["Info finder","Deep extractor requests"])
     with tabs[0]:
-        DeepExtractorInterface(session_logger).main_interface()
+        InfoFinderInterface(session_logger,oxylabs_manager).product_finder()
     with tabs[1]:
-        InfoFinderInterface(session_logger,oxylabs_manager).google_product_finder()
+        DeepExtractorInterface(session_logger).main_interface()
 
 
 elif st.session_state["authentication_status"] is False:

@@ -1020,37 +1020,51 @@ class DeepExtractorInterface:
         )
         
         # Configuration for different services
+        country_list = ['it', 'us', 'uk', 'fr', 'de', 'es']
         self.service_configs = {
             "Google Results Oxylab": {
                 "function_name": "oxylabs_serp_crawler",
-                "countries": ['it', 'us', 'uk', 'fr', 'de', 'es'],
+                "countries": country_list,
                 "has_year_filter": True
             },
             "Google Results SerpAPI": {
                 "function_name": "serpapi_serp_crawler",
-                "countries": ['it', 'us', 'uk', 'fr', 'de', 'es'],
+                "countries": country_list,
                 "has_year_filter": True
             },
             "Amazon Reviews": {
                 "function_name": "get_amazon_review",
-                "countries": ['it', 'de', 'es', 'fr', 'com', 'co.uk', 'co.jp', 'ae', 'ca', 'cn', 
-                            'com.au', 'com.be', 'com.br', 'com.mx', 'com.tr', 'eg', 'in', 'nl', 'pl', 'sa', 'se'],
+                "countries": country_list,
                 "validator": self._is_valid_asin,
                 "error_msg": "One or more invalid ASINs detected"
             },
             "Google Reviews": {  # TO REVIEW AND ADD A VALIDATOR
                 "function_name": "serpapi_review_crawler",
-                "countries": ['it', 'de', 'es', 'fr', 'com', 'co.uk', 'co.jp', 'ae', 'ca', 'cn', 
-                            'com.au', 'com.be', 'com.br', 'com.mx', 'com.tr', 'eg', 'in', 'nl', 'pl', 'sa', 'se'],
-            }
+                "countries": country_list,
+            },
         }
+        #Need to review functions that does not need paginator
+        """    "Google Product Info": {  # TO REVIEW AND ADD A VALIDATOR
+                "function_name": "get_google_product_info",
+                "countries": country_list,
+            },
+            "Amazon Product Info": {  # TO REVIEW AND ADD A VALIDATOR
+                "function_name": "get_amazon_product_info",
+                "countries": country_list,
+                "validator": self._is_valid_asin,
+                "error_msg": "One or more invalid ASINs detected"
+            }
+        }"""
 
     def main_interface(self):
         """Main interface for the deep extractor."""        
         # Get and validate queries
         queries_list = self._get_validated_queries()
+        deactivated_buton=False
+
         if not queries_list:
-            return
+            st.warning("Start by providing your queries separated by comma")
+            deactivated_buton=True
             
         # Service selection
         service_name = st.selectbox("Select a service", list(self.service_configs.keys()))
@@ -1060,7 +1074,7 @@ class DeepExtractorInterface:
         if validator := service_config.get('validator'):
             if not all(validator(query) for query in queries_list):
                 st.error(service_config['error_msg'])
-                return
+                deactivated_buton=True
         
         # Common parameters
         payload = {
@@ -1087,7 +1101,7 @@ class DeepExtractorInterface:
             )
         
         # Post request button
-        if st.button("Post Request", use_container_width=True):
+        if st.button("Post Request", use_container_width=True, disabled=deactivated_buton):
             self.batch_request_logger.post_list_scheduler_request(
                 queries_list,
                 session_logger=self.session_logger,
@@ -1100,7 +1114,6 @@ class DeepExtractorInterface:
         """Get and validate user input queries."""
         query_input = st.text_area("Enter your keys separated by comma", key="deep_extractor_query")
         if not query_input:
-            st.warning("Start by providing your queries separated by comma")
             return []
         return [q.strip() for q in query_input.split(',') if q.strip()]
 
@@ -1116,7 +1129,7 @@ class InfoFinderInterface():
         self.session_logger = session_logger
         self.oxylabs_manager = oxylabmanager
 
-    def google_product_finder(self):
+    def product_finder(self):
         # Initialize session state for search results if not exists
         if 'product_results' not in st.session_state:
             st.session_state.product_results = None
@@ -1125,9 +1138,14 @@ class InfoFinderInterface():
         
         country =  st.selectbox("Country", ['it', 'us'])
         
+        search_methods = {
+            'amazon': self.oxylabs_manager.get_amazon_asins,
+            'google': self.oxylabs_manager.get_google_productids
+        }
+        search_method = st.selectbox("Search Method", list(search_methods.keys()))
         # Search button updates the session state
         if st.button("search"):
-            product_ids = self.oxylabs_manager.get_google_productids(product_name, domain=country)
+            product_ids = search_methods[search_method](product_name, domain=country)
             st.session_state.product_results = product_ids
 
         # Display results if they exist in session state

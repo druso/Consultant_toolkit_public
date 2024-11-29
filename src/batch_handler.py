@@ -200,7 +200,7 @@ class BatchManager(FolderSetupMixin):
             self.batch_summary_logger.update_wip_progress(job_payload.user_id, job_payload.batch_id, 0)
             for progress in batches_constructor.df_batches_handler(
                 func=selected_function, 
-                batch_size=job_payload.batch_size, 
+                #batch_size=job_payload.batch_size, 
                 response_column=job_payload.response_column, 
                 query_column=job_payload.query_column, 
                 **job_payload.kwargs
@@ -345,7 +345,9 @@ class BatchManager(FolderSetupMixin):
             "serpapi_serp_crawler",
             "oxylabs_serp_crawler",
             "get_amazon_review",
-            "serpapi_review_crawler"
+            "serpapi_review_crawler",
+            "get_google_product_info",
+            "get_amazon_product_info",
         }
         
         selected_function = available_functions.get(job_payload.function)
