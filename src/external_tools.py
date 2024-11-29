@@ -428,59 +428,6 @@ class SerpApiManager:
         self.credential_manager = credential_manager
         self.base_url = "https://serpapi.com/search"
         pass
-    
-    def extract_organic_results(self, search_query, num_results, country, last_years=None):
-        """Given a search_query and a num_result to provide it will return the organic first positions of the organic search
-        The response will be a json with Position, Title, Link and Source for each result scraped.
-        """
-        api_key = self.credential_manager.get_api_key('serp_api')
-        if not api_key:
-            raise StopProcessingError("SerpAPI key not found. Please set it in the **🔧 Settings & Recovery** page.")
-
-        params = {
-            'engine': 'google',  # Specifies which search engine to use, e.g., google
-            'q': search_query,  # Query parameter, what you are searching for
-            'api_key': api_key,  # SerpApi API key
-            'gl': country,
-        }
-        if last_years > 0:
-            params['tbs'] = f"qdr:y{last_years}"
-
-        try:
-            response = requests.get(self.base_url, params=params)
-            if response.status_code == 401:
-                raise StopProcessingError(f"Encountered a 401 Unauthorized Error: {response.text}") 
-            
-            response.raise_for_status()  # Raises an HTTPError for bad responses
-            response_json = response.json()
-            self.save_request_log(response_json, "serpAPI", f"search_query_{search_query}")
-        
-        except StopProcessingError as e:
-            raise
-        except Exception as e:
-            raise RetryableError(f"Encountered an error: {e}")
-
-        # Ensure the number of requested results does not exceed the available results
-        num_results = min(num_results, len(response_json['organic_results']))
-        
-        # Initialize a list to store the results
-        results = []
-        
-        # Loop through the first num_results entries in 'organic_results'
-        for i in range(num_results):
-            result = response_json['organic_results'][i]
-            # Extract the desired information
-            extracted_data = {
-                'position': result.get('position', 'No position provided'),
-                'link': result.get('link', 'No link provided'),
-                'source': result.get('source', 'No source provided'),
-                'title': result.get('title', 'No title provided'),
-                'snippet': result.get('snippet', 'No snippet provided'),
-                'date': result.get('date', 'No date provided')
-            }
-            results.append(extracted_data)
-        
-        return json.dumps(results, indent=4)
 
             
     def serpapi_serp_crawler(self, query, **kwargs): #the new method to use with universal paginator
@@ -546,6 +493,69 @@ class SerpApiManager:
         return formatted_results
 
 
+            
+    def serpapi_review_crawler(self, product_id, **kwargs): #the new method to use with universal paginator
+        """
+        Crawl Google product reviews using SerpAPI.
+        Args:
+            query: search query
+            
+        Possible kwargs:
+            - country: geographical location for search (gl parameter)
+            - last_years: filter results by number of years
+            - start_page: starting page number (default 1)
+            - pages: number of pages to fetch (not used in SerpAPI but kept for compatibility)
+        """
+        api_key = self.credential_manager.get_api_key('serp_api')
+        if not api_key:
+            raise StopProcessingError("SerpAPI key not found. Please set it in the **🔧 Settings & Recovery** page.")
+
+        params = {
+            'engine': 'google_product',
+            'product_id': product_id,
+            'reviews': "1",
+            'api_key': api_key,
+            'gl': kwargs.get('country', 'US'),  # Default to US if not specified
+        }
+
+        if kwargs.get('filter'):
+            #print("passing filter")
+            params['filter'] = kwargs.get('filter')
+
+
+        try:
+            response = requests.get(self.base_url, params=params)
+            if response.status_code == 401:
+                raise StopProcessingError(f"Encountered a 401 Unauthorized Error: {response.text}") 
+            
+            response.raise_for_status()
+            response_json = response.json()
+        
+        except StopProcessingError as e:
+            raise
+        except Exception as e:
+            raise RetryableError(f"Encountered an error: {e}")
+
+
+        review_list = []
+        total_results_number = response_json.get('product_results', {}).get('reviews', 0)
+        next_page_filter = response_json.get('serpapi_pagination', {}).get('next_page_filter', 0)
+        for result in response_json.get('reviews_results', {}).get('reviews', []):
+            review = {
+                "result_type": "product_review",
+                "position": result.get('position'),
+                "title": result.get('title'),
+                "date": result.get('date'),
+                "rating": result.get('rating'),
+                "source": result.get('source'),
+                "content": result.get('content'),
+                "total_results_number": total_results_number,
+            }
+            review_list.append(review)
+        
+        return review_list, next_page_filter
+
+
 class WebScraper:
 
     def __init__(self,session_logger):
@@ -572,7 +582,6 @@ class WebScraper:
         except requests.exceptions.RequestException as e:
             logger.error(f"Error extracting content from '{url}': {e}")
             return "Crawling failed"
-    
     
 class OxyLabsManager():
     def __init__(self,session_logger, credential_manager):
@@ -654,6 +663,39 @@ class OxyLabsManager():
         # Use re.match to check if the string matches the pattern
         return bool(re.match(pattern, asin_str))
     
+
+
+    def get_amazon_asins(self, search_string, **kwargs):
+
+        payload = {
+            'source': 'amazon_search',
+            'parse': True,
+            'start_page': kwargs.get('start_page', 1)
+        }
+        payload['query'] = search_string
+        payload['domain'] = kwargs.get('domain','it')
+
+        data = self._post_oxylab_request(payload)
+        organic_list = data['results'][0]['content']['results'].get('organic',[])
+        #print (organic_list)
+        extracted_data = [
+            {
+                'source': 'amazon', 
+                'position': item.get('pos',''),
+                'title': item.get('title',""),
+                'brand': item.get('manufacturer',''),
+                'product_id': item.get('asin',""),
+                'price': item.get('price',''),
+                'rating': item.get('rating',''),
+                'currency': kwargs.get('domain','it'),
+                'reviews_count': item.get('reviews_count',''),
+                'thumbnail': item['url_image'],
+            } 
+            for item in organic_list
+        ]
+
+        return extracted_data
+        
 
     def get_amazon_product_info(self, asin, **kwargs):
         if not self._is_valid_asin(asin):
@@ -821,7 +863,67 @@ class OxyLabsManager():
 
         return formatted_results
     
-    
+    def get_google_productids(self, search_string, **kwargs):
+
+        payload = {
+            'source': 'google_shopping_search',
+            'parse': True,
+            'start_page': kwargs.get('start_page', 1)
+        }
+        payload['query'] = search_string
+        payload['domain'] = kwargs.get('domain','it')
+
+        data = self._post_oxylab_request(payload)
+
+        organic_list = data['results'][0]['content']['results'].get('organic', [])
+        #print(f"organic_list: {organic_list}")
+        extracted_data = [
+        {
+            'source': 'google',
+            'position': item.get('pos_overall',''),
+            'title': item.get('title',""),
+            'product_id': item.get('product_id',""),
+            'price': item.get('price',''),
+            'rating': item.get('rating',''),
+            'currency': item.get('currency',''),
+            'reviews_count': item.get('reviews_count',''),
+            'thumbnail': item.get('thumbnail',"")
+        }
+        for item in organic_list
+        if item.get('product_id')  
+    ]
+
+        return extracted_data    
+
+
+    def get_google_product_info(self, product_id, **kwargs):
+
+        payload = {
+            'source': 'google_shopping_product',
+            'parse': True,
+        }
+        payload['query'] = product_id
+        payload['domain'] = kwargs.get('domain','it')
+        if kwargs.get('start_page',None):
+            payload['start_page'] = kwargs.get('start_page', 1)
+
+        data = self._post_oxylab_request(payload)
+
+        product = data['results'][0]['content']
+        title = product.get('title',"")
+        description = product.get('description',"")
+        # Convert specifications to a semicolon-separated string
+        specifications = product.get('specifications',[{}])[0].get('items',[])
+        specifications_text = ";".join([f"{item['title']}:{item['value']}" for item in specifications])
+
+        # Store the extracted data in a dictionary
+        extracted_data = {
+            'title': title,
+            'description': description,
+            'specifications': specifications_text
+        }
+
+        return extracted_data    
 
 class GoogleManager:
     def __init__(self, session_logger, credential_manager):
@@ -977,6 +1079,7 @@ class GoogleManager:
         except Exception as e:
             raise RetryableError(f"Failed to fetch transcript: {str(e)}")
 
+
 def universal_paginator(request_method, query: str, num_results=None, **kwargs):
     start_page = kwargs.get('start_page', 1)
     max_retries = 3
@@ -986,12 +1089,15 @@ def universal_paginator(request_method, query: str, num_results=None, **kwargs):
     total_results = None
     processed_results = 0
     last_results_count = 0
+    next_page_filter = None ###############################################################################
     
     while True:
         current_kwargs = kwargs.copy()
         
         if 'serpapi' in request_method.__name__:
             current_kwargs['processed_results'] = processed_results
+            if next_page_filter:
+                current_kwargs['filter'] = next_page_filter
         else:
             current_kwargs['pages'] = pages_per_request
             current_kwargs['start_page'] = str(current_page)
@@ -1000,70 +1106,56 @@ def universal_paginator(request_method, query: str, num_results=None, **kwargs):
         page_results = None
         
         while retry_count < max_retries:
-            try:
-                page_results = request_method(query, **current_kwargs)
-                # Check if page_results is None or empty
-                if not page_results:
-                    logger.warning(f"No results returned for query '{query}' on page {current_page}")
-                    break
-                
-                current_processed = processed_results
-                current_batch_size = len(page_results)
-                
-                # If we have a num_results limit, only take what we need
-                if num_results and (current_processed + current_batch_size) > num_results:
-                    page_results = page_results[:num_results - current_processed]
-                    current_batch_size = len(page_results)  # Recalculate after truncating
+            result = request_method(query, **current_kwargs)
+            if isinstance(result, tuple): ##################################################################
+                page_results, next_page_filter = result
+            else:
+                page_results = result
+                next_page_filter = None
 
-                # Calculate absolute positions
-                base_position = current_processed + 1
-                for i, result in enumerate(page_results):
-                    result['absolute_position'] = base_position + i
-                
-                # Update total_results if available
-                if total_results is None and page_results and page_results[0].get('total_results_number'):
-                    total_results = min(
-                        page_results[0].get('total_results_number'),
-                        num_results if num_results else float('inf')
-                    )
-                
-                # Update counters safely
-                last_results_count = current_batch_size
-                processed_results = current_processed + current_batch_size
-                
-                progress_info = {
-                    'current_page': current_page,
-                    'total_results': total_results,
-                    'processed_results': processed_results
-                }
-                
-                yield page_results, progress_info
+            if not page_results:
                 break
+            
+            current_processed = processed_results
+            current_batch_size = len(page_results)
+            
+            # If we have a num_results limit, only take what we need
+            if num_results and (current_processed + current_batch_size) > num_results:
+                page_results = page_results[:num_results - current_processed]
+                current_batch_size = len(page_results)  # Recalculate after truncating
+
+            # Calculate absolute positions
+            base_position = current_processed + 1
+            for i, result in enumerate(page_results):
+                result['absolute_position'] = base_position + i
+            
+            # Update total_results if available
+            if total_results is None and page_results and page_results[0].get('total_results_number'):
+                total_results = min(
+                    page_results[0].get('total_results_number'),
+                    num_results if num_results else float('inf')
+                )
+            
+            # Update counters safely
+            last_results_count = current_batch_size
+            processed_results = current_processed + current_batch_size
+            
+            progress_info = {
+                'current_page': current_page,
+                'total_results': total_results,
+                'processed_results': processed_results
+            }
+            
+            yield page_results, progress_info
+            break
                 
-            except RetryableError as e:
-                retry_count = retry_count + 1
-                if retry_count < max_retries:
-                    logger.warning(f"Retryable error occurred: {str(e)}. Retrying in 5 seconds... ({retry_count}/{max_retries})")
-                    sleep(5)
-                else:
-                    logger.error(f"Max retries reached for retryable error: {str(e)}")
-                    break
-            except SkippableError as e:
-                logger.error(f"Skippable error occurred: {str(e)}. Skipping pages {current_page}-{current_page + pages_per_request - 1}.")
-                break
-            except StopProcessingError:
-                logger.error("Processing was stopped due to a StopProcessingError.")
-                raise
         
         # Break conditions with explicit logging
         if not page_results:
-            logger.info(f"Stopping pagination: No results returned for query '{query}'")
             break
         if num_results and processed_results >= num_results:
-            logger.info(f"Stopping pagination: Reached target number of results ({num_results})")
             break
         if last_results_count == 2:
-            logger.info("Stopping pagination: Reached end of available results")
             break
         
         current_page = current_page + pages_per_request

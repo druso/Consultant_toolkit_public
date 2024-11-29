@@ -37,7 +37,7 @@ if st.session_state["authentication_status"]:
         request_constructor=DfRequestConstructor(df_processor, session_logger)
         
           
-        tabs = st.tabs(["LLM", "Google", "Amazon", "Youtube", "Crawler", "Table Handler", "Assistant Setup"])
+        tabs = st.tabs(["LLM", "Google","Reviews" ,"Amazon","Youtube", "Crawler", "Table Handler", "Assistant Setup"])
         with tabs[0]:        
             df_processor = request_constructor.llm_request_single_column(llm_manager)
             sync_streamlit_processed_df(df_processor)
@@ -45,17 +45,20 @@ if st.session_state["authentication_status"]:
             df_processor = request_constructor.google_request_single_column(serpapi_manager, oxylabs_manager)  
             sync_streamlit_processed_df(df_processor)  
         with tabs[2]:
-            df_processor = request_constructor.amazon_request_single_column(oxylabs_manager)  
+            df_processor = request_constructor.review_request_single_column(serpapi_manager)
             sync_streamlit_processed_df(df_processor)
         with tabs[3]:
-            df_processor = request_constructor.yt_transcript_request_single_column(google_manager)  
+            df_processor = request_constructor.amazon_request_single_column(oxylabs_manager)  
             sync_streamlit_processed_df(df_processor)
         with tabs[4]:
-            df_processor = request_constructor.crawler_request_single_column(web_scraper, oxylabs_manager) 
+            df_processor = request_constructor.yt_transcript_request_single_column(google_manager)  
             sync_streamlit_processed_df(df_processor)
         with tabs[5]:
-            df_processor = request_constructor.df_handler()
+            df_processor = request_constructor.crawler_request_single_column(web_scraper, oxylabs_manager) 
+            sync_streamlit_processed_df(df_processor)
         with tabs[6]:
+            df_processor = request_constructor.df_handler()
+        with tabs[7]:
             openai_thread_setup(openai_advance_manager).streamlit_interface(df_processor.processed_df)
             
 

@@ -1,10 +1,10 @@
 ### 👋 Welcome to Consultant Toolkit: 
 
-This project has been developed during my free time, heavily assisted by ChatGPT and Gemini.
+This project has been developed during my free time, heavily assisted by ChatGPT, Claude and Gemini.
 
-It is a collection of python functions wrapped in a cozy Streamlit app!
+It is a collection of python functions organized as a streamlit app to assists the job of a digital consultant.
 
-The tool will ask for [Groq](https://groq.com/), [Openai](https://platform.openai.com/), [Oxylab](https://oxylabs.io/) and [SerpAPI](https://serpapi.com/) API keys if not provided within the environment.
+The tool will ask for [Groq](https://groq.com/), [Openai](https://platform.openai.com/), [Oxylab](https://oxylabs.io/) and [SerpAPI](https://serpapi.com/) API keys if not provided within the environment by the webmaster.
 
 It can be used without setting the keys, but related service won't be available and errors may arise.
 Finally the repository can be deployed easily using [Railway](https://railway.app/) or run locally as a streamlit app (streamlit run Hello.py)
@@ -16,7 +16,7 @@ With that said..
 Navigate the tools using the sidebar on the left. Upload files and configure options (like your favorite LLM ).
 Don't forget to take not of your  **session_id**! It's your key 🔑 to retrieving content and logs later on using the 💾 Session Recovery if needed. The tool runs on API keys with tiny budgets 💰, so use it wisely or help me find a 💸sponsor💸! 
 
-⚠️ Important: Data is hosted on US servers 🇺🇸, and LLM requests share info with OpenAI or Groq. Be mindful of your data!
+⚠️ Important: Data is hosted on US servers, and LLM requests share info with OpenAI or Groq. Be mindful of your data!
 
 ## 📈 Generative Excel
 
