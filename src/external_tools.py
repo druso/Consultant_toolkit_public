@@ -519,7 +519,7 @@ class SerpApiManager:
         }
 
         if kwargs.get('filter'):
-            print("passing filter")
+            #print("passing filter")
             params['filter'] = kwargs.get('filter')
 
 
@@ -677,7 +677,7 @@ class OxyLabsManager():
 
         data = self._post_oxylab_request(payload)
         organic_list = data['results'][0]['content']['results'].get('organic',[])
-        print (organic_list)
+        #print (organic_list)
         extracted_data = [
             {
                 'source': 'amazon', 
@@ -876,7 +876,7 @@ class OxyLabsManager():
         data = self._post_oxylab_request(payload)
 
         organic_list = data['results'][0]['content']['results'].get('organic', [])
-        print(f"organic_list: {organic_list}")
+        #print(f"organic_list: {organic_list}")
         extracted_data = [
         {
             'source': 'google',
