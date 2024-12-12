@@ -927,6 +927,12 @@ class streamlit_batches_status():
                 selected_row = self.completed_batches[self.completed_batches['batch_id'] == selected_batch_id].iloc[0]
                 
                 filename = f"processed_{selected_row['input_file']}"
+
+
+                #FIX THIS PROPERLY!!!#######################################################################################################################
+                if filename.endswith('.json'):
+                    filename = filename[:-5] + '.xlsx' 
+                print(filename)
                 output_file_path = os.path.join(
                     self.batch_request_logger.tool_config['logs_root_folder'], 
                     self.batch_request_logger.user_id,
