@@ -895,7 +895,7 @@ class OxyLabsManager():
 
         return clean_content
 
-    def oxylab_serp_crawler(self, query, **kwargs):
+    def oxylabs_serp_crawler(self, query, **kwargs):
         """
         Crawl Google SERP using Oxylabs API.
         - query: search query

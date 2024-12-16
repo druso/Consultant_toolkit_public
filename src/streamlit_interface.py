@@ -189,7 +189,7 @@ class DfRequestConstructor():
                 
             if crawler_type == "Oxylabs":
 
-                self._base_batch_streamlit(function=oxylabs_manager.oxylab_serp_crawler, 
+                self._base_batch_streamlit(function=oxylabs_manager.oxylabs_serp_crawler, 
                                         query_name="Content to search", 
                                         response_name="Google Results",
                                         function_name="Google Search",
