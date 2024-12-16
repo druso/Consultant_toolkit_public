@@ -334,7 +334,7 @@ class BatchManager(FolderSetupMixin):
         available_functions = {
             "llm_request": llm_manager.llm_request,
             "serpapi_serp_crawler": serpapi_manager.serpapi_serp_crawler,
-            "oxylab_serp_crawler": oxylabs_manager.oxylab_serp_crawler,
+            "oxylabs_serp_crawler": oxylabs_manager.oxylabs_serp_crawler,
             "get_amazon_product_info": oxylabs_manager.get_amazon_product_info,
             "get_amazon_review": oxylabs_manager.get_amazon_review,
             "web_crawler": oxylabs_manager.web_crawler,
@@ -344,7 +344,7 @@ class BatchManager(FolderSetupMixin):
         
         list_supported_functions = {
             "serpapi_serp_crawler",
-            "oxylab_serp_crawler",
+            "oxylabs_serp_crawler",
             "get_amazon_review",
             "serpapi_review_crawler",
             "serpapi_maps_reviews_crawler",
