@@ -495,17 +495,7 @@ class SerpApiManager:
 
             
     def serpapi_review_crawler(self, product_id, **kwargs): #the new method to use with universal paginator
-        """
-        Crawl Google product reviews using SerpAPI.
-        Args:
-            query: search query
-            
-        Possible kwargs:
-            - country: geographical location for search (gl parameter)
-            - last_years: filter results by number of years
-            - start_page: starting page number (default 1)
-            - pages: number of pages to fetch (not used in SerpAPI but kept for compatibility)
-        """
+
         api_key = self.credential_manager.get_api_key('serp_api')
         if not api_key:
             raise StopProcessingError("SerpAPI key not found. Please set it in the **🔧 Settings & Recovery** page.")
@@ -520,7 +510,7 @@ class SerpApiManager:
 
         if kwargs.get('filter'):
             #print("passing filter")
-            params['filter'] = kwargs.get('filter')
+            params['filter'] = kwargs.get('filter') #I use next_pagination_filter here
 
 
         try:
@@ -555,6 +545,115 @@ class SerpApiManager:
         
         return review_list, next_page_filter
 
+    def serpapi_maps_fetch_places(self, query, latitude, longitude, **kwargs):
+        """
+        Fetches a list of places based on latitude, longitude, and keyword.
+
+        Parameters:
+            latitude (float): Latitude of the location.
+            longitude (float): Longitude of the location.
+            keyword (str): Search keyword.
+            api_key (str): API key for SerpApi.
+
+        Returns:
+            dict: Dictionary containing the local results (places) or None if no results.
+        """        
+        api_key = self.credential_manager.get_api_key('serp_api')
+        if not api_key:
+            raise StopProcessingError("SerpAPI key not found. Please set it in the **🔧 Settings & Recovery** page.")
+
+
+        maps_params = {
+            "engine": "google_maps",
+            "q": query,
+            "ll": f"@{latitude},{longitude},15z",
+            "type": "search",
+            "api_key": api_key,
+        }
+
+        try:
+            maps_response = requests.get(self.base_url, params=maps_params)
+            maps_response.raise_for_status()
+            response_json = maps_response.json()
+
+            locals_list = []
+            for result in response_json.get('local_results', {}):
+                local = {
+                    "result_type": "local_result",
+                    "position": result.get('position'),
+                    "title": result.get('title'),
+                    "place_id": result.get('place_id'),
+                    "gps_coordinates": result.get('gps_coordinates'),
+                    "rating": result.get('rating'),
+                    "reviews": result.get('reviews'),
+                    "types": result.get('types'),
+                    "address": result.get('address'),
+                    "thumbnail": result.get('thumbnail'),
+                }
+                locals_list.append(local)
+            
+            return locals_list
+        
+        except StopProcessingError as e:
+            raise
+        except Exception as e:
+            raise RetryableError(f"Encountered an error: {e}")
+
+
+    def serpapi_maps_reviews_crawler(self, place_id, **kwargs):
+        """
+        Fetches reviews for a specific place based on its place_id.
+
+        Parameters:
+            place_id (str): The place_id of the location.
+            api_key (str): API key for SerpApi.
+
+        Returns:
+            dict: Dictionary containing the reviews for the place or None if no reviews found.
+        """
+
+        api_key = self.credential_manager.get_api_key('serp_api')
+        if not api_key:
+            raise StopProcessingError("SerpAPI key not found. Please set it in the **🔧 Settings & Recovery** page.")
+
+        reviews_params = {
+            "engine": "google_maps_reviews",
+            "place_id": place_id,
+            "api_key": api_key,
+        }        
+        
+        if kwargs.get('filter'):
+            #print("passing filter")
+            reviews_params['next_page_token'] = kwargs.get('filter') #I use next_pagination_filter here
+
+        try:
+            reviews_response = requests.get(self.base_url, params=reviews_params)
+            reviews_response.raise_for_status()
+            response_json = reviews_response.json()
+
+            review_list = []
+            total_results_number = response_json.get('place_info', {}).get('reviews', 0)
+            next_page_filter = response_json.get('serpapi_pagination', {}).get('next_page_token', 0)
+            for result in response_json.get('reviews', []):
+                review = {
+                    "result_type": "place_review",
+                    "rating": result.get('rating'),
+                    "extracted_snippet": result.get('extracted_snippet'),
+                    "contributor": result.get('user').get('name'),
+                    "contributor_id": result.get('user').get('contributor_id'),
+                    "source": result.get('source'),
+                    "iso_date": result.get('iso_date'),
+                    "link": result.get('link'),
+                    "total_results_number": total_results_number,
+                }
+                review_list.append(review)
+            
+            return review_list, next_page_filter
+
+        except StopProcessingError as e:
+            raise
+        except Exception as e:
+            raise RetryableError(f"Encountered an error: {e}")
 
 class WebScraper:
 
