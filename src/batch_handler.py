@@ -339,6 +339,7 @@ class BatchManager(FolderSetupMixin):
             "get_amazon_review": oxylabs_manager.get_amazon_review,
             "web_crawler": oxylabs_manager.web_crawler,
             "serpapi_review_crawler": serpapi_manager.serpapi_review_crawler,
+            "serpapi_maps_reviews_crawler": serpapi_manager.serpapi_maps_reviews_crawler,
         }        
         
         list_supported_functions = {
@@ -346,6 +347,7 @@ class BatchManager(FolderSetupMixin):
             "oxylab_serp_crawler",
             "get_amazon_review",
             "serpapi_review_crawler",
+            "serpapi_maps_reviews_crawler",
             "get_google_product_info",
             "get_amazon_product_info",
         }

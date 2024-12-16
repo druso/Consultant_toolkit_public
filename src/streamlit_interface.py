@@ -932,7 +932,7 @@ class streamlit_batches_status():
                 #FIX THIS PROPERLY!!!#######################################################################################################################
                 if filename.endswith('.json'):
                     filename = filename[:-5] + '.xlsx' 
-                print(filename)
+
                 output_file_path = os.path.join(
                     self.batch_request_logger.tool_config['logs_root_folder'], 
                     self.batch_request_logger.user_id,
@@ -1048,19 +1048,12 @@ class DeepExtractorInterface:
                 "function_name": "serpapi_review_crawler",
                 "countries": country_list,
             },
-        }
-        #Need to review functions that does not need paginator
-        """    "Google Product Info": {  # TO REVIEW AND ADD A VALIDATOR
-                "function_name": "get_google_product_info",
+            "Google Maps Reviews": {  # TO REVIEW AND ADD A VALIDATOR
+                "function_name": "serpapi_maps_reviews_crawler",
                 "countries": country_list,
             },
-            "Amazon Product Info": {  # TO REVIEW AND ADD A VALIDATOR
-                "function_name": "get_amazon_product_info",
-                "countries": country_list,
-                "validator": self._is_valid_asin,
-                "error_msg": "One or more invalid ASINs detected"
-            }
-        }"""
+        }
+
 
     def main_interface(self):
         """Main interface for the deep extractor."""        
@@ -1131,32 +1124,52 @@ class DeepExtractorInterface:
 class InfoFinderInterface():
     """Interface for searching info useful for deep extraction requests"""
     
-    def __init__(self, session_logger: SessionLogger, oxylabmanager:OxyLabsManager):
+    def __init__(self, session_logger: SessionLogger, oxylabmanager:OxyLabsManager, serpapi_manager:SerpApiManager):
         self.session_logger = session_logger
         self.oxylabs_manager = oxylabmanager
-
-    def product_finder(self):
-        # Initialize session state for search results if not exists
-        if 'product_results' not in st.session_state:
-            st.session_state.product_results = None
-
-        product_name = st.text_input("Enter the product name")
+        self.serpapi_manager = serpapi_manager
         
-        country =  st.selectbox("Country", ['it', 'us'])
+        # Initialize session state for search results if not exists
+        if 'info_search_results' not in st.session_state:
+            st.session_state.info_search_results = None
+
+    def info_finder_interface(self):        
         
         search_methods = {
             'amazon': self.oxylabs_manager.get_amazon_asins,
-            'google': self.oxylabs_manager.get_google_productids
+            'google': self.oxylabs_manager.get_google_productids,
+            'google_maps': self.serpapi_manager.serpapi_maps_fetch_places
         }
-        search_method = st.selectbox("Search Method", list(search_methods.keys()))
+        selected_method = st.selectbox("Search Method", list(search_methods.keys()))
+        if selected_method == 'google_maps':
+            keyword = st.text_input("Enter the keyword")
+            latitude = st.number_input("Enter the latitude", value=45.4642)
+            longitude = st.number_input("Enter the longitude", value=9.19)
+            self.place_finder(keyword, latitude, longitude, search_methods[selected_method])
+
+        else:
+            product_name = st.text_input("Enter the product name")
+            country =  st.selectbox("Country", ['it', 'us'])
+            self.product_finder(product_name, country, search_methods[selected_method])
+        
+
+    def place_finder(self, keyword, latitude, longitude, search_method):
+        if st.button("search"):
+            place_ids = search_method(keyword, latitude, longitude)
+            st.session_state.info_search_results = place_ids
+        self.preview_results("place_id")
+
+    def product_finder(self, product_name, country, search_method):
         # Search button updates the session state
         if st.button("search"):
-            product_ids = search_methods[search_method](product_name, domain=country)
-            st.session_state.product_results = product_ids
+            product_ids = search_method(product_name, domain=country)
+            st.session_state.info_search_results = product_ids
+        self.preview_results("product_id")
 
+    def preview_results(self, column_name):
         # Display results if they exist in session state
-        if st.session_state.product_results:
-            df = pd.DataFrame(st.session_state.product_results)
+        if st.session_state.info_search_results:
+            df = pd.DataFrame(st.session_state.info_search_results)
             
             # Display the DataFrame with selection
             event = st.dataframe(
@@ -1175,11 +1188,11 @@ class InfoFinderInterface():
             
             # If rows are selected, display the IDs
             if event.selection.rows:
-                selected_ids = df.iloc[event.selection.rows]['product_id'].tolist()
+                selected_ids = df.iloc[event.selection.rows][column_name].tolist()
                 st.text_area(
-                    "Selected Product IDs", 
+                    "Selected IDs", 
                     value=",".join(selected_ids),
                     help="Copy these comma-separated IDs to use them in other tools"
                 )
-        elif st.session_state.product_results == []:
+        elif st.session_state.info_search_results == []:
             st.warning("No products found")

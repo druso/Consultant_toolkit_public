@@ -1,7 +1,7 @@
 import logging
 logger = logging.getLogger(__name__)
 from src.streamlit_interface import DeepExtractorInterface, InfoFinderInterface
-from src.external_tools import OxyLabsManager
+from src.external_tools import OxyLabsManager, SerpApiManager  
 from src.streamlit_setup  import page_setup, page_footer
 import streamlit as st
 import os
@@ -16,10 +16,11 @@ if st.session_state["authentication_status"]:
     session_logger = st.session_state["session_logger"]
     credential_manager = st.session_state['credential_manager']
     oxylabs_manager = OxyLabsManager(session_logger,credential_manager)
+    serpapi_manager = SerpApiManager(session_logger,credential_manager)
 
     tabs = st.tabs(["Info finder","Deep extractor requests"])
     with tabs[0]:
-        InfoFinderInterface(session_logger,oxylabs_manager).product_finder()
+        InfoFinderInterface(session_logger,oxylabs_manager, serpapi_manager).info_finder_interface()
     with tabs[1]:
         DeepExtractorInterface(session_logger).main_interface()
 
