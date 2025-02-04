@@ -1149,7 +1149,7 @@ class InfoFinderInterface():
 
         else:
             product_name = st.text_input("Enter the product name")
-            country =  st.selectbox("Country", ['it', 'us'])
+            country =  st.selectbox("Country", ['it', 'us', 'de'])
             self.product_finder(product_name, country, search_methods[selected_method])
         
 
