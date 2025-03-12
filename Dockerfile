@@ -4,4 +4,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . /app 
 WORKDIR /app
 EXPOSE 8501
-CMD ["/bin/sh", "-c", "echo PORT=$PORT && streamlit run Hello.py --server.address 0.0.0.0 --server.port $PORT --server.fileWatcherType none --browser.gatherUsageStats false --client.toolbarMode minimal"]
+CMD ["/bin/sh", "-c", "echo PORT=$PORT && streamlit run Hello.py & python3 scheduler.py --server.address 0.0.0.0 --server.port $PORT --server.fileWatcherType none --browser.gatherUsageStats false --client.toolbarMode minimal"]

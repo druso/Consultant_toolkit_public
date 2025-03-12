@@ -865,7 +865,32 @@ class BatchSummaryLogger(FolderSetupMixin):
         except Exception as e:
             logger.error(f"Error updating payload status: {str(e)}")
             return payload_filename
+        
+    def cleanup_stuck_progress_files(self, timeout_seconds):
+        """
+        Removes old progress files that might be stuck due to errors or interruptions.
 
+        Args:
+            user_id (str): The user ID.
+            batch_id (str): The batch ID.
+            timeout_seconds (int): The maximum age of a progress file in seconds before it's considered stuck.
+        """
+        now = time.time()
+        for file in os.listdir(self.wip_folder):
+ 
+            file_path = os.path.join(self.wip_folder, file)
+            file_lock = FileLockManager(file_path) #instantiate the class
+            try:
+                file_age = now - os.path.getmtime(file_path)
+                if file_age > timeout_seconds:
+                    file_lock.secure_remove() #use the secure_remove function
+                    logger.warning(f"Removed stuck progress file: {file}")
+
+            except Exception as e:
+                logger.error(f"Error cleaning up progress file {file}: {e}")
+
+        if not os.listdir(self.wip_folder):
+               logger.info(f"No stuck files found in {self.wip_folder}")
 
 class OpenaiThreadLogger(FolderSetupMixin) :
 
