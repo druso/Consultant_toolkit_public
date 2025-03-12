@@ -9,7 +9,7 @@ from datetime import datetime
 from src.setup import scheduler_setup, CredentialManager
 from src.file_manager import FolderSetupMixin
 from src.batch_handler import BatchManager
-import pandas as pd
+from src.file_manager import BatchSummaryLogger
 
 
 
@@ -91,11 +91,14 @@ def run_scheduler(tool_config, credential_manager_factory, batch_manager_factory
 
             if not pending_files:
                 logger.info("No pending jobs found.")
+                batch_summary_logger = BatchSummaryLogger(tool_config)
+                batch_summary_logger.cleanup_stuck_progress_files(timeout_seconds=tool_config.get('stuck_file_timeout',7200))     
 
             for filename in pending_files:
                 job_queue.put(filename)
                 logger.info(f"Added file to job queue: {filename}")
 
+       
             logger.info(f"Will sleep for {tool_config['scheduler_frequency']} seconds, good night")
             time.sleep(tool_config['scheduler_frequency'])
     except KeyboardInterrupt:
