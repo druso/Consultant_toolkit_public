@@ -6,7 +6,7 @@ openai
 transformers
 requests
 tiktoken
-textract==1.6.3
+textract
 numpy
 scikit-learn
 beautifulsoup4
