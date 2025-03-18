@@ -832,7 +832,7 @@ class BatchSummaryLogger(FolderSetupMixin):
     def update_payload_status(self, payload_filename, status):
         payload_filepath = os.path.join(self.batches_folder, payload_filename)
         
-        if not status in ["PENDING", "WIP", "COMPLETED", "CANCELLED","STOPPED" "FAILED"]:
+        if not status in ["PENDING", "WIP", "COMPLETED", "CANCELLED","STOPPED", "FAILED"]:
             """
             PENDING: waiting to be processed
             WIP: being processed

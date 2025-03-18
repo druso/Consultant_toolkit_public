@@ -91,6 +91,7 @@ def run_scheduler(tool_config, credential_manager_factory, batch_manager_factory
 
             if not pending_files:
                 logger.info("No pending jobs found.")
+                logger.info(f"Queue size: {job_queue.qsize()}") 
                 batch_summary_logger = BatchSummaryLogger(tool_config)
                 batch_summary_logger.cleanup_stuck_progress_files(timeout_seconds=tool_config.get('stuck_file_timeout',7200))     
 
