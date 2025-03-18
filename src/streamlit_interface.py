@@ -116,7 +116,7 @@ class DfRequestConstructor():
                                                     response_column=response_column, 
                                                     kwargs=kwargs
                                                     )
-                    st.toast("Request sent to the scheduler", icon='🚀')
+                    st.toast("Request sent to the scheduler, check it in ⏳ Batches Monitor", icon='🚀')
     
     def llm_request_single_column(self, llm_manager, config_package=None):
         if config_package:
@@ -1107,7 +1107,7 @@ class DeepExtractorInterface:
                 function_name=service_config["function_name"],
                 kwargs=payload
             )
-            st.toast("Request sent to the scheduler", icon='🚀')
+            st.toast("Request sent to the scheduler, check it in ⏳ Batches Monitor", icon='🚀')
 
     def _get_validated_queries(self) -> list[str]:
         """Get and validate user input queries."""
