@@ -174,7 +174,7 @@ class DfRequestConstructor():
             st.write("Here you can take a column and search each item on Google, will return the first page, if need more use the dedicated function (different tab)")
 
             crawler_type = st.selectbox("Select the crawler", options=["Oxylabs", "SerpAPI"], help="Select the crawler you want to use")
-            country=st.selectbox("country",['it','us','uk','fr','de','es']) 
+            country=st.selectbox("country",['it','us','co.uk','fr','de','es']) 
 
             last_years = st.number_input("N of Past Years",min_value=0,max_value=10,step=1,value=0, help="Limit results to certain past years. Set to 0 for no limit")
 
@@ -1026,7 +1026,7 @@ class DeepExtractorInterface:
         )
         
         # Configuration for different services
-        country_list = ['it', 'us', 'uk', 'fr', 'de', 'es']
+        country_list = ['it', 'us', 'co.uk', 'fr', 'de', 'es']
         self.service_configs = {
             "Google Results Oxylab": {
                 "function_name": "oxylabs_serp_crawler",
