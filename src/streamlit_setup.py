@@ -8,6 +8,7 @@ from streamlit_authenticator.utilities.hasher import Hasher
 from src.setup import load_config, setup_logging, CredentialManager
 from src.file_manager import SessionLogger, FileLockManager
 import textract
+import os
 
 def user_login():
 
@@ -153,24 +154,30 @@ class DataLoader:
 
         concatenated_text = ""
         for uploaded_file in uploaded_files:
+            temp_file_path = None
             try:
                 if uploaded_file.name.endswith('.txt'):
                     text = uploaded_file.read().decode('utf-8')
                 else:
                     temp_file_path = '/tmp/' + uploaded_file.name
                     # Write the uploaded file to a temporary location, extract
-                    # the text, and then clean up the file
+                    # the text, and ensure cleanup
                     FileLockManager(temp_file_path).secure_write(uploaded_file.getbuffer())
-                    try:
-                        text = textract.process(temp_file_path).decode('utf-8')
-                    finally:
-                        FileLockManager(temp_file_path).secure_remove()
-                
+                    text = textract.process(temp_file_path).decode('utf-8')
+
                 concatenated_text += text
             except Exception as e:
                 st.sidebar.error(f"Failed to load document {uploaded_file.name}: {e}")
                 concatenated_text += self.default
-        
+            finally:
+                if temp_file_path and os.path.exists(temp_file_path):
+                    try:
+                        os.remove(temp_file_path)
+                    except Exception as cleanup_err:
+                        logger.error(
+                            f"Failed to remove temporary file {temp_file_path}: {cleanup_err}"
+                        )
+
         return concatenated_text
 
 
