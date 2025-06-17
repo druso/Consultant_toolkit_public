@@ -27,6 +27,46 @@ class SkippableError(Exception):
     pass
 
 
+def _exponential_backoff(func, max_retries=3, base_delay=1, exc_types=(Exception,)):
+    """Execute *func* with retries using exponential backoff.
+
+    Parameters
+    ----------
+    func : callable
+        Function to execute.
+    max_retries : int, optional
+        Maximum number of attempts. Default 3.
+    base_delay : int or float, optional
+        Initial backoff delay in seconds. Default 1.
+    exc_types : tuple, optional
+        Exceptions that trigger a retry.
+    """
+    delay = base_delay
+    for attempt in range(1, max_retries + 1):
+        try:
+            return func()
+        except exc_types as e:
+            if attempt == max_retries:
+                raise
+            logger.warning(
+                f"Attempt {attempt} failed with {e}. Retrying in {delay}s"
+            )
+            time.sleep(delay)
+            delay *= 2
+
+
+def _handle_http_errors(response):
+    """Raise appropriate exceptions based on HTTP status."""
+    if response.status_code in (401, 403):
+        raise StopProcessingError(f"Authentication failed: {response.text}")
+    if response.status_code == 404:
+        raise SkippableError(f"Resource not found: {response.text}")
+    if response.status_code == 429 or response.status_code >= 500:
+        raise RetryableError(f"Temporary server issue ({response.status_code}): {response.text}")
+    if response.status_code >= 400:
+        raise SkippableError(f"Bad request ({response.status_code}): {response.text}")
+
+
 class openai_advanced_uses:
 
     def __init__(self, session_logger: SessionLogger, credential_manager=None):
@@ -300,52 +340,58 @@ class LlmManager:
         final_prompt = [{"role": "user", "content": user_msg}]
         final_prompt.insert (0,{"role": "system", "content": sys_msg})
         
-        try:
-            call_params = {
-                "model": self.model,
-                "messages": final_prompt,
-                "temperature": self.llm_temp,
-            }
-            if json_mode:
-                call_params["response_format"] = {"type": "json_object"}
+        call_params = {
+            "model": self.model,
+            "messages": final_prompt,
+            "temperature": self.llm_temp,
+        }
+        if json_mode:
+            call_params["response_format"] = {"type": "json_object"}
 
-            response = self.client.chat.completions.create(**call_params)
-            self.save_request_log(response.model_dump_json(), "LLM", "llm_request")
-            return response.choices[0].message.content or None
-        
-        except (openai.AuthenticationError, openai.PermissionDeniedError) as e:
-            raise StopProcessingError(f"Encountered an error: {e}")
-        except Exception as e:
-            raise RetryableError(f"Encountered an error: {e}")
+        def _call():
+            try:
+                response = self.client.chat.completions.create(**call_params)
+                self.save_request_log(response.model_dump_json(), "LLM", "llm_request")
+                return response.choices[0].message.content or None
+            except (openai.AuthenticationError, openai.PermissionDeniedError) as e:
+                raise StopProcessingError(f"Encountered an error: {e}")
+            except Exception as e:
+                raise RetryableError(f"Encountered an error: {e}")
+
+        return _exponential_backoff(_call, max_retries=max_retries, base_delay=retry_delay, exc_types=(RetryableError,))
 
 
-    def llm_chat_request(self, chat_messages, sys_msg, history_lenght=8, stream=True): 
+    def llm_chat_request(self, chat_messages, sys_msg, history_lenght=8, stream=True, max_retries=3, retry_delay=1):
         """Call the llm and return the response. Takes as input a list of chat messages and the string for sys_message.
         Optionally history_length can be set (default=8) and stream can be set to false"""
         # Cut conversation history to history_length (domanda + risposta = 2)
         final_chat_messages = chat_messages[-history_lenght:]
         # Add system message to the top
         final_chat_messages.insert (0,{"role": "system", "content": sys_msg})
-        try:
-            call_params = {
+        call_params = {
                         "model": self.model,
                         "messages": final_chat_messages,
                         "temperature": self.llm_temp,
                         "stream":stream
                     }
-            response = self.client.chat.completions.create(**call_params)
-            if stream:
-                for chunk in response:
-                    if chunk.choices[0].delta.content is not None:
-                        yield chunk.choices[0].delta.content
-            else:
-                self.save_request_log(response, "LLM", "llm_chat_request")
-                return response.choices[0].message.content
-            
-        except (openai.AuthenticationError, openai.PermissionDeniedError) as e:
-            raise StopProcessingError(f"Encountered an error: {e}")
-        except Exception as e:
-            raise RetryableError(f"Encountered an error: {e}")
+
+        def _call():
+            try:
+                response = self.client.chat.completions.create(**call_params)
+                return response
+            except (openai.AuthenticationError, openai.PermissionDeniedError) as e:
+                raise StopProcessingError(f"Encountered an error: {e}")
+            except Exception as e:
+                raise RetryableError(f"Encountered an error: {e}")
+
+        response = _exponential_backoff(_call, max_retries=max_retries, base_delay=retry_delay, exc_types=(RetryableError,))
+        if stream:
+            for chunk in response:
+                if chunk.choices[0].delta.content is not None:
+                    yield chunk.choices[0].delta.content
+        else:
+            self.save_request_log(response, "LLM", "llm_chat_request")
+            return response.choices[0].message.content
     
     def embed_query(self, query, force_openai=True):
         
@@ -366,17 +412,20 @@ class LlmManager:
             except Exception as e:
                 raise RetryableError(f"Encountered an error: {e}")
         else:"""
-        try:
-            client = self.openai_client
-            embeddings_response = client.embeddings.create(input = [query], model=self.embeddings_model)
-            query_embeddings = embeddings_response.data[0].embedding
-            
-            self.save_request_log(embeddings_response, "LLM", "embed_query")
-            return query_embeddings
-        except (openai.AuthenticationError, openai.PermissionDeniedError) as e:
-            raise StopProcessingError(f"Encountered an error: {e}")
-        except Exception as e:
-            raise RetryableError(f"Encountered an error: {e}")
+        client = self.openai_client
+
+        def _call():
+            try:
+                embeddings_response = client.embeddings.create(input=[query], model=self.embeddings_model)
+                query_embeddings = embeddings_response.data[0].embedding
+                self.save_request_log(embeddings_response, "LLM", "embed_query")
+                return query_embeddings
+            except (openai.AuthenticationError, openai.PermissionDeniedError) as e:
+                raise StopProcessingError(f"Encountered an error: {e}")
+            except Exception as e:
+                raise RetryableError(f"Encountered an error: {e}")
+
+        return _exponential_backoff(_call, max_retries=3, exc_types=(RetryableError,))
 
 
 class AudioTranscribe:
@@ -390,19 +439,20 @@ class AudioTranscribe:
         if not api_key:
             raise StopProcessingError(f"{provider} API key not found.")
         
-        try:
-            logger.info(f"Requesting transcription of audio with {provider}")
-            client = client_class(api_key=api_key)
-            transcription = client.audio.transcriptions.create(
-                model=model,
-                file=audio_file,
-            )
-            
-            self.save_request_log(transcription, "whisper", "transcribe_audio")
-            return transcription.text
-        
-        except Exception as e:
-            raise RetryableError(f"Encountered an error: {e}")
+        def _call():
+            try:
+                logger.info(f"Requesting transcription of audio with {provider}")
+                client = client_class(api_key=api_key)
+                transcription = client.audio.transcriptions.create(
+                    model=model,
+                    file=audio_file,
+                )
+                self.save_request_log(transcription, "whisper", "transcribe_audio")
+                return transcription.text
+            except Exception as e:
+                raise RetryableError(f"Encountered an error: {e}")
+
+        return _exponential_backoff(_call, max_retries=3, exc_types=(RetryableError,))
 
     def whisper_groq_transcribe(self, audio_file, client=groq.Groq):
         return self._transcribe_audio(
@@ -460,18 +510,22 @@ class SerpApiManager:
         if last_years > 0:
             params['tbs'] = f"qdr:y{last_years}"
 
+        def _call():
+            try:
+                response = requests.get(self.base_url, params=params)
+                _handle_http_errors(response)
+                return response.json()
+            except requests.RequestException as e:
+                raise RetryableError(f"Network error: {e}")
+
         try:
-            response = requests.get(self.base_url, params=params)
-            if response.status_code == 401:
-                raise StopProcessingError(f"Encountered a 401 Unauthorized Error: {response.text}") 
-            
-            response.raise_for_status()
-            response_json = response.json()
-        
-        except StopProcessingError as e:
+            response_json = _exponential_backoff(
+                _call,
+                max_retries=3,
+                exc_types=(RetryableError,)
+            )
+        except (StopProcessingError, SkippableError, RetryableError):
             raise
-        except Exception as e:
-            raise RetryableError(f"Encountered an error: {e}")
 
 
         formatted_results = []
@@ -509,22 +563,24 @@ class SerpApiManager:
         }
 
         if kwargs.get('filter'):
-            #print("passing filter")
-            params['filter'] = kwargs.get('filter') #I use next_pagination_filter here
+            params['filter'] = kwargs.get('filter')
 
+        def _call():
+            try:
+                response = requests.get(self.base_url, params=params)
+                _handle_http_errors(response)
+                return response.json()
+            except requests.RequestException as e:
+                raise RetryableError(f"Network error: {e}")
 
         try:
-            response = requests.get(self.base_url, params=params)
-            if response.status_code == 401:
-                raise StopProcessingError(f"Encountered a 401 Unauthorized Error: {response.text}") 
-            
-            response.raise_for_status()
-            response_json = response.json()
-        
-        except StopProcessingError as e:
+            response_json = _exponential_backoff(
+                _call,
+                max_retries=3,
+                exc_types=(RetryableError,)
+            )
+        except (StopProcessingError, SkippableError, RetryableError):
             raise
-        except Exception as e:
-            raise RetryableError(f"Encountered an error: {e}")
 
 
         review_list = []
@@ -571,33 +627,40 @@ class SerpApiManager:
             "api_key": api_key,
         }
 
-        try:
-            maps_response = requests.get(self.base_url, params=maps_params)
-            maps_response.raise_for_status()
-            response_json = maps_response.json()
+        def _call():
+            try:
+                maps_response = requests.get(self.base_url, params=maps_params)
+                _handle_http_errors(maps_response)
+                return maps_response.json()
+            except requests.RequestException as e:
+                raise RetryableError(f"Network error: {e}")
 
-            locals_list = []
-            for result in response_json.get('local_results', {}):
-                local = {
-                    "result_type": "local_result",
-                    "position": result.get('position'),
-                    "title": result.get('title'),
-                    "place_id": result.get('place_id'),
-                    "gps_coordinates": result.get('gps_coordinates'),
-                    "rating": result.get('rating'),
-                    "reviews": result.get('reviews'),
-                    "types": result.get('types'),
-                    "address": result.get('address'),
-                    "thumbnail": result.get('thumbnail'),
-                }
-                locals_list.append(local)
-            
-            return locals_list
-        
-        except StopProcessingError as e:
+        try:
+            response_json = _exponential_backoff(
+                _call,
+                max_retries=3,
+                exc_types=(RetryableError,)
+            )
+        except (StopProcessingError, SkippableError, RetryableError):
             raise
-        except Exception as e:
-            raise RetryableError(f"Encountered an error: {e}")
+
+        locals_list = []
+        for result in response_json.get('local_results', {}):
+            local = {
+                "result_type": "local_result",
+                "position": result.get('position'),
+                "title": result.get('title'),
+                "place_id": result.get('place_id'),
+                "gps_coordinates": result.get('gps_coordinates'),
+                "rating": result.get('rating'),
+                "reviews": result.get('reviews'),
+                "types": result.get('types'),
+                "address": result.get('address'),
+                "thumbnail": result.get('thumbnail'),
+            }
+            locals_list.append(local)
+
+        return locals_list
 
 
     def serpapi_maps_reviews_crawler(self, place_id, **kwargs):
@@ -626,61 +689,73 @@ class SerpApiManager:
             #print("passing filter")
             reviews_params['next_page_token'] = kwargs.get('filter') #I use next_pagination_filter here
 
+        def _call():
+            try:
+                reviews_response = requests.get(self.base_url, params=reviews_params)
+                _handle_http_errors(reviews_response)
+                return reviews_response.json()
+            except requests.RequestException as e:
+                raise RetryableError(f"Network error: {e}")
+
         try:
-            reviews_response = requests.get(self.base_url, params=reviews_params)
-            reviews_response.raise_for_status()
-            response_json = reviews_response.json()
-
-            review_list = []
-            total_results_number = response_json.get('place_info', {}).get('reviews', 0)
-            next_page_filter = response_json.get('serpapi_pagination', {}).get('next_page_token', 0)
-            for result in response_json.get('reviews', []):
-                review = {
-                    "result_type": "place_review",
-                    "rating": result.get('rating'),
-                    "extracted_snippet": result.get('extracted_snippet'),
-                    "contributor": result.get('user').get('name'),
-                    "contributor_id": result.get('user').get('contributor_id'),
-                    "source": result.get('source'),
-                    "iso_date": result.get('iso_date'),
-                    "link": result.get('link'),
-                    "total_results_number": total_results_number,
-                }
-                review_list.append(review)
-            
-            return review_list, next_page_filter
-
-        except StopProcessingError as e:
+            response_json = _exponential_backoff(
+                _call,
+                max_retries=3,
+                exc_types=(RetryableError,)
+            )
+        except (StopProcessingError, SkippableError, RetryableError):
             raise
-        except Exception as e:
-            raise RetryableError(f"Encountered an error: {e}")
+
+        review_list = []
+        total_results_number = response_json.get('place_info', {}).get('reviews', 0)
+        next_page_filter = response_json.get('serpapi_pagination', {}).get('next_page_token', 0)
+        for result in response_json.get('reviews', []):
+            review = {
+                "result_type": "place_review",
+                "rating": result.get('rating'),
+                "extracted_snippet": result.get('extracted_snippet'),
+                "contributor": result.get('user').get('name'),
+                "contributor_id": result.get('user').get('contributor_id'),
+                "source": result.get('source'),
+                "iso_date": result.get('iso_date'),
+                "link": result.get('link'),
+                "total_results_number": total_results_number,
+            }
+            review_list.append(review)
+
+        return review_list, next_page_filter
 
 class WebScraper:
 
     def __init__(self,session_logger):
         self.save_request_log = session_logger.save_request_log
     def url_simple_extract(self, url):
+        def _call():
+            try:
+                response = requests.get(url)
+                _handle_http_errors(response)
+                return response.text
+            except requests.RequestException as e:
+                raise RetryableError(f"Network error: {e}")
+
         try:
-            response = requests.get(url)
-            response.raise_for_status() 
-
-            soup = BeautifulSoup(response.text, 'html.parser')
-
-            # Customize text extraction here (e.g., focus on specific elements)
-            text_elements = [tag.get_text(strip=True) for tag in soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'])]
-
-            # Construct the combined content (if you need it)
-            content = "\n\n".join(text_elements)
-
-            # Save to your log
-            clean_url = re.sub(r'[^\w\-_]', '_', url)[:20]
-            self.save_request_log({"content": text_elements}, "Crawler", f"base_crawl_{clean_url}")
-
-            return content
-
-        except requests.exceptions.RequestException as e:
+            html = _exponential_backoff(
+                _call,
+                max_retries=3,
+                exc_types=(RetryableError,)
+            )
+        except (StopProcessingError, SkippableError, RetryableError) as e:
             logger.error(f"Error extracting content from '{url}': {e}")
             return "Crawling failed"
+
+        soup = BeautifulSoup(html, 'html.parser')
+
+        text_elements = [tag.get_text(strip=True) for tag in soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'])]
+        content = "\n\n".join(text_elements)
+        clean_url = re.sub(r'[^\w\-_]', '_', url)[:20]
+        self.save_request_log({"content": text_elements}, "Crawler", f"base_crawl_{clean_url}")
+
+        return content
     
 class OxyLabsManager():
     def __init__(self,session_logger, credential_manager):
@@ -720,37 +795,33 @@ class OxyLabsManager():
         """
         username, password = self._get_credentials()
 
+        def _call():
+            try:
+                response = requests.post(
+                    'https://realtime.oxylabs.io/v1/queries',
+                    auth=(username, password),
+                    json=payload,
+                    timeout=self.request_timeout
+                )
+                _handle_http_errors(response)
+                response_json = response.json()
+                self.save_request_log(response_json, "OxyLabs", f"{payload.get('source')}")
+                return response_json
+            except requests.Timeout:
+                raise RetryableError("Request timed out")
+            except requests.ConnectionError:
+                raise RetryableError("Network connection error")
+            except requests.RequestException as e:
+                raise RetryableError(str(e))
+
         try:
-            response = requests.post(
-                'https://realtime.oxylabs.io/v1/queries',
-                auth=(username, password),
-                json=payload,
-                timeout=self.request_timeout
+            return _exponential_backoff(
+                _call,
+                max_retries=3,
+                exc_types=(RetryableError,)
             )
-            response.raise_for_status()
-            response_json = response.json()
-            self.save_request_log(response_json, "OxyLabs", f"{payload.get('source')}")
-            return response_json
-
-        except requests.Timeout:
-            raise RetryableError("Request timed out. Should Retry.")
-
-        except requests.ConnectionError:
-            raise RetryableError("Network connection error. Should Retry.")
-
-        except requests.HTTPError as e:
-            if e.response.status_code in [401, 403]:
-                raise StopProcessingError("Authentication failed. Please check your API credentials.")
-            elif e.response.status_code in [400, 422]:
-                raise SkippableError(f"Bad request: {e.response.text}. Skipping this request.")
-            else:
-                raise StopProcessingError(f"HTTP error occurred: {e.response.status_code} - {e.response.text}")
-
-        except requests.RequestException as e:
-            raise StopProcessingError(f"Failed to fetch content: {str(e)}")
-
-        except Exception as e:
-            raise StopProcessingError(f"An unexpected error occurred: {str(e)}")
+        except (StopProcessingError, SkippableError, RetryableError):
+            raise
         
     
     def _is_valid_asin(self, asin_str):
@@ -1048,23 +1119,27 @@ class GoogleManager:
             StopProcessingError: For authentication errors
             RetryableError: For temporary API issues
         """
+        params['key'] = self.credential_manager.get_api_key('google')
+        url = f"{self.yt_base_url}/{endpoint}"
+
+        def _call():
+            try:
+                response = requests.get(url, params=params)
+                _handle_http_errors(response)
+                data = response.json()
+                self.save_request_log(data, "YouTube", log_identifier)
+                return data
+            except requests.RequestException as e:
+                raise RetryableError(f"Network error: {e}")
+
         try:
-            params['key'] = self.credential_manager.get_api_key('google')
-            url = f"{self.yt_base_url}/{endpoint}"
-            
-            response = requests.get(url, params=params)
-            response.raise_for_status()
-            data = response.json()
-            
-            self.save_request_log(data, "YouTube", log_identifier)
-            return data
-            
-        except requests.exceptions.RequestException as e:
-            if isinstance(e, requests.exceptions.HTTPError) and e.response.status_code in (401, 403):
-                raise StopProcessingError(f"Authentication failed: {str(e)}")
-            raise RetryableError(f"Failed to fetch YouTube data: {str(e)}")
-        except Exception as e:
-            raise RetryableError(f"Unexpected error: {str(e)}")
+            return _exponential_backoff(
+                _call,
+                max_retries=3,
+                exc_types=(RetryableError,)
+            )
+        except (StopProcessingError, SkippableError, RetryableError):
+            raise
     
     def get_youtube_channel_videos(self, channel_name, max_results=50):
         """
