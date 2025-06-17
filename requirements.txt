@@ -9,7 +9,7 @@ tiktoken>=0.3.3
 textract>=1.6.4
 numpy>=1.21
 scikit-learn>=1.0
-beautifulsoup4>=4.9.3
+beautifulsoup4>=4.8.0,<4.9.0
 streamlit_authenticator==0.3.2
 streamlit-autorefresh>=0.0.3
 youtube_transcript_api>=0.6
