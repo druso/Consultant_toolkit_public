@@ -70,7 +70,7 @@ def run_scheduler(tool_config, credential_manager_factory, batch_manager_factory
     job_queue = Queue()
 
     threads = []
-    for i in range(tool_config['max_cuncurrent_jobs']):
+    for i in range(tool_config['max_concurrent_jobs']):
         t = threading.Thread(
             target=worker, 
             args=(job_queue, credential_manager_factory, batch_manager_factory)

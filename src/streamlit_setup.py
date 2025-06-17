@@ -3,7 +3,6 @@ logger = logging.getLogger(__name__)
 
 import pandas as pd
 import streamlit as st
-import streamlit as st
 import streamlit_authenticator as stauth
 from streamlit_authenticator.utilities.hasher import Hasher
 from src.setup import load_config, setup_logging, CredentialManager

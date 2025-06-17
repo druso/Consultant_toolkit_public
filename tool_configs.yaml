@@ -21,7 +21,7 @@ shared_summaries_folder: summaries
 shared_completed_folder: archived
 shared_wip_folder: wip
 scheduler_frequency: 60
-max_cuncurrent_jobs: 5
+max_concurrent_jobs: 5
 stuck_file_timeout: 7200
 
 # Services
