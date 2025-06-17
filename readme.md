@@ -8,6 +8,7 @@ The tool will ask for [Groq](https://groq.com/), [Openai](https://platform.opena
 
 It can be used without setting the keys, but related service won't be available and errors may arise.
 Finally the repository can be deployed easily using [Railway](https://railway.app/) or run locally as a streamlit app (streamlit run Hello.py)
+The provided Dockerfile uses **Python&nbsp;3.9**, so make sure your local environment also runs on a compatible version.
 
 With that said..
 
