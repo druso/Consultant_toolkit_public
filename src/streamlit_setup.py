@@ -158,10 +158,13 @@ class DataLoader:
                     text = uploaded_file.read().decode('utf-8')
                 else:
                     temp_file_path = '/tmp/' + uploaded_file.name
-                    with open(temp_file_path, "wb") as f:
-                        FileLockManager(temp_file_path).secure_write(uploaded_file.getbuffer())
-
-                    text = textract.process(temp_file_path).decode('utf-8')
+                    # Write the uploaded file to a temporary location, extract
+                    # the text, and then clean up the file
+                    FileLockManager(temp_file_path).secure_write(uploaded_file.getbuffer())
+                    try:
+                        text = textract.process(temp_file_path).decode('utf-8')
+                    finally:
+                        FileLockManager(temp_file_path).secure_remove()
                 
                 concatenated_text += text
             except Exception as e:
