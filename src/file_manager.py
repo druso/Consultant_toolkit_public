@@ -12,6 +12,7 @@ import time
 import re
 from typing import Tuple, Any, Optional, List, Union
 import shutil
+import ast
 from contextlib import contextmanager
 
 
@@ -313,10 +314,14 @@ class DataFrameProcessor:
             parsed_series = series.apply(safe_json_loads)
         elif expected_type == "List":
             def safe_eval(val):
-                try:
-                    return eval(val) if isinstance(val, str) else val
-                except:
-                    return None  # Handle invalid eval by returning None
+                if isinstance(val, str):
+                    try:
+                        return ast.literal_eval(val)
+                    except (ValueError, SyntaxError) as e:
+                        logger.warning(f"Malformed list data '{val}': {e}")
+                        return None
+                else:
+                    return val
             parsed_series = series.apply(safe_eval)
         else:
             parsed_series = series  # Keep as is for "String/Other"
